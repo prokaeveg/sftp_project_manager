@@ -24,7 +24,18 @@ go.work.sum
 
 # env file
 .env
+.git
 
 # Editor/IDE
-# .idea/
+.idea/
 # .vscode/
+
+# Generated application artifacts
+/frontend/node_modules/
+/frontend/dist/
+/frontend/wailsjs/
+/build/bin/
+/build/*.syso
+/*.syso
+/data/
+/dist/
