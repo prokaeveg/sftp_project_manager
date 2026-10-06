@@ -14,6 +14,7 @@ try {
         (Join-Path $projectRoot 'docs/exclusions.md'),
         (Join-Path $projectRoot 'docs/file-trees.md'),
         (Join-Path $projectRoot 'docs/batch-transfers.md'),
+        (Join-Path $projectRoot 'docs/ide-workspace.md'),
         (Join-Path $projectRoot 'README.md')
     )
     Compress-Archive -LiteralPath $releaseFiles -DestinationPath (Join-Path $projectRoot 'dist/sftp-project-manager-windows-amd64.zip') -Force

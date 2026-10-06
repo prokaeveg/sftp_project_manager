@@ -36,7 +36,8 @@ export interface Project {
     id: string;
     name: string;
     localRoot: string;
-    connections: ProjectConnection[]
+    connections: ProjectConnection[];
+    defaultConnectionID?: string
 }
 
 export interface SSHDiscovery {
@@ -136,6 +137,8 @@ interface API {
     EvaluateSSH(connection: Connection, trusted: boolean): Promise<SSHEffective>;
 
     SelectLocalDirectory(current: string): Promise<string>;
+
+    ListProjectLocal(relative: string): Promise<FileEntry[]>;
 
     ListLocal(relative: string): Promise<FileEntry[]>;
 

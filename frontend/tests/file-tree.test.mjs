@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { treeRoot, treeNode, toggleDirectory, loadDirectory, selectEntry } from '../src/file-tree.ts'
+import { treeRoot, treeNode, toggleDirectory, loadDirectory, selectEntry, toMappingPath } from '../src/file-tree.ts'
 
 const folder = (name, relativePath = name) => ({ name, relativePath, size: 0, isDir: true, isLink: false, excluded: false })
 const file = (name, relativePath = name) => ({ ...folder(name, relativePath), isDir: false, size: 12 })
@@ -112,4 +112,14 @@ test('duplicate loading is suppressed and an old root cannot populate a new sele
  await pending
  assert.deepEqual(newRoot.children, [])
  assert.equal(newRoot.loaded, false)
+})
+
+test('upload paths are mapped relative to the selected local mapping with boundary checks', () => {
+ assert.equal(toMappingPath('.', '.'), '.')
+ assert.equal(toMappingPath('src', 'src'), '.')
+ assert.equal(toMappingPath('src/components/App.vue', 'src'), 'components/App.vue')
+ assert.throws(() => toMappingPath('src-old/file', 'src'), /вне маппинга/)
+ assert.throws(() => toMappingPath('.', 'src'), /вне маппинга/)
+ assert.throws(() => toMappingPath('../secret', '.'), /выходит за пределы проекта/)
+ assert.throws(() => toMappingPath('C:/outside/file', '.'), /не относится к папке проекта/)
 })

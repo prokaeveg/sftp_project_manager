@@ -272,10 +272,16 @@ func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Stat
 		p := &settings.Projects[i]
 		if p.ID == projectID {
 			project = p
+			if connectionID == "" && mappingID == "" {
+				connectionID, mappingID = projectSelection(*p, "", "")
+			}
 			for j := range p.Connections {
 				c := &p.Connections[j]
 				if c.ID == connectionID {
 					connection = c
+					if mappingID == "" {
+						mappingID = c.Mappings[0].ID
+					}
 					for k := range c.Mappings {
 						m := &c.Mappings[k]
 						if m.ID == mappingID {
@@ -287,7 +293,7 @@ func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Stat
 			}
 		}
 	}
-	if project == nil || connection == nil || selected == nil {
+	if project == nil || len(project.Connections) > 0 && (connection == nil || selected == nil) || len(project.Connections) == 0 && (connectionID != "" || mappingID != "") {
 		return Status{}, errors.New("проект, подключение или сопоставление не найдены")
 	}
 	settings.ActiveProjectID = projectID
@@ -300,20 +306,22 @@ func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Stat
 	if err != nil {
 		return Status{}, err
 	}
-	remote, err := root.LocalToRemote(selected.LocalPath)
-	if err != nil {
-		return Status{}, err
-	}
-	local, err := root.RemoteToLocal(remote)
-	if err != nil {
-		return Status{}, err
-	}
-	info, err := os.Stat(local)
-	if err != nil {
-		return Status{}, err
-	}
-	if !info.IsDir() {
-		return Status{}, errors.New("выбранная локальная папка должна быть каталогом")
+	if selected != nil {
+		remote, err := root.LocalToRemote(selected.LocalPath)
+		if err != nil {
+			return Status{}, err
+		}
+		local, err := root.RemoteToLocal(remote)
+		if err != nil {
+			return Status{}, err
+		}
+		info, err := os.Stat(local)
+		if err != nil {
+			return Status{}, err
+		}
+		if !info.IsDir() {
+			return Status{}, errors.New("выбранная локальная папка должна быть каталогом")
+		}
 	}
 	if err = s.store.Save(settings); err != nil {
 		return Status{}, err

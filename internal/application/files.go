@@ -68,7 +68,7 @@ func (s *Service) SaveProfile(profile config.Profile) (Status, error) {
 	s.mu.Lock()
 	settings := cloneSettings(s.status.Settings)
 	settings.ProjectName = profile.Name
-	legacy := config.Project{ID: "legacy-project", Name: profile.Name, LocalRoot: profile.LocalRoot, Connections: []config.ProjectConnection{{ID: "legacy-connection", Name: "Default", Connection: profile.Connection, Excludes: append([]string(nil), profile.Excludes...), Mappings: []config.Mapping{{ID: "legacy-mapping", LocalPath: ".", RemotePath: profile.RemoteRoot}}}}}
+	legacy := config.Project{ID: "legacy-project", Name: profile.Name, LocalRoot: profile.LocalRoot, DefaultConnectionID: "legacy-connection", Connections: []config.ProjectConnection{{ID: "legacy-connection", Name: "Default", Connection: profile.Connection, Excludes: append([]string(nil), profile.Excludes...), Mappings: []config.Mapping{{ID: "legacy-mapping", LocalPath: ".", RemotePath: profile.RemoteRoot}}}}}
 	idx := -1
 	for i, p := range settings.Projects {
 		if p.ID == legacy.ID {
@@ -89,7 +89,7 @@ func (s *Service) SaveProfile(profile config.Profile) (Status, error) {
 		s.mu.Unlock()
 		return Status{}, err
 	}
-	if idx >= 0 && !slices.Equal(s.status.Settings.Projects[idx].Connections[0].Excludes, profile.Excludes) {
+	if idx >= 0 && len(s.status.Settings.Projects[idx].Connections) > 0 && !slices.Equal(s.status.Settings.Projects[idx].Connections[0].Excludes, profile.Excludes) {
 		s.pending = nil
 	}
 	s.status.Settings = cloneSettings(settings)
@@ -179,6 +179,35 @@ func (s *Service) ListLocal(relative string) ([]FileEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	return listLocal(profile, relative)
+}
+
+// ListProjectLocal lists the full selected project, independently of a server
+// or mapping. Connection exclusions remain relative to the project root.
+func (s *Service) ListProjectLocal(relative string) ([]FileEntry, error) {
+	s.mu.Lock()
+	var profile config.Profile
+	for _, project := range s.status.Settings.Projects {
+		if project.ID != s.status.Settings.ActiveProjectID {
+			continue
+		}
+		profile = config.Profile{Name: project.Name, LocalRoot: project.LocalRoot, RemoteRoot: "/"}
+		for _, connection := range project.Connections {
+			if connection.ID == s.status.Settings.ActiveConnectionID {
+				profile.Excludes = slices.Clone(connection.Excludes)
+				break
+			}
+		}
+		break
+	}
+	s.mu.Unlock()
+	if profile.LocalRoot == "" {
+		return nil, errors.New("сначала выберите проект")
+	}
+	return listLocal(profile, relative)
+}
+
+func listLocal(profile config.Profile, relative string) ([]FileEntry, error) {
 	mapper, err := mapping.New(profile.LocalRoot, profile.RemoteRoot)
 	if err != nil {
 		return nil, err

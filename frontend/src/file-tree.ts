@@ -22,6 +22,24 @@ export function selectEntry(selection: Set<string>, entry: FileEntry, checked: b
  else selection.delete(entry.relativePath)
 }
 
+// Convert a project-root-relative local path into the active mapping's path space.
+// Reject parent/sibling selections so a transfer can never silently target the
+// wrong remote location when the mapping is narrower than the project root.
+export function toMappingPath(projectRelative: string, mappingLocalPath: string): string {
+ const clean = (value: string) => {
+  const normalized = value.replace(/\\/g, '/')
+  if (normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) throw new Error('Путь не относится к папке проекта. Выберите файл или папку внутри выбранного маппинга.')
+  const parts = normalized.split('/').filter(part => part && part !== '.')
+  if (parts.some(part => part === '..')) throw new Error('Путь выходит за пределы проекта. Выберите файл или папку внутри выбранного маппинга.')
+  return parts.join('/')
+ }
+ const path = clean(projectRelative), mapping = clean(mappingLocalPath)
+ if (!mapping) return path || '.'
+ if (path === mapping) return '.'
+ if (path.startsWith(`${mapping}/`)) return path.slice(mapping.length + 1)
+ throw new Error(`Путь «${projectRelative}» находится вне маппинга «${mappingLocalPath}». Выберите файл или папку внутри выбранной локальной папки.`)
+}
+
 // A successful refresh discards descendant caches, including paths removed on disk.
 // On failure keep the previous listing, with an explicit error and a retry action.
 export async function loadDirectory(node: TreeNode, loader: DirectoryLoader): Promise<void> {

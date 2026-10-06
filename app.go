@@ -69,6 +69,9 @@ func (a *App) SelectProject(projectID, connectionID, mappingID string) (applicat
 func (a *App) ListLocal(relative string) ([]application.FileEntry, error) {
 	return a.service.ListLocal(relative)
 }
+func (a *App) ListProjectLocal(relative string) ([]application.FileEntry, error) {
+	return a.service.ListProjectLocal(relative)
+}
 func (a *App) ListRemote(relative string) ([]application.FileEntry, error) {
 	return a.service.ListRemote(a.ctx, relative)
 }

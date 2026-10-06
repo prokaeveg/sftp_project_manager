@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := check
 
-.PHONY: check vet test frontend-test build dev frontend-dev
+.PHONY: check vet test frontend-test verify-ui build dev frontend-dev
 
 check: vet test frontend-test
 
@@ -12,6 +12,10 @@ test:
 
 frontend-test:
 	npm --prefix frontend test
+
+verify-ui:
+	npm --prefix frontend run build
+	node scripts/verify-ui.mjs
 
 build:
 	go run github.com/wailsapp/wails/v2/cmd/wails@v2.16.0 build -platform windows/amd64 -webview2 error
