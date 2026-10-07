@@ -1,5 +1,6 @@
 export interface Connection {
     mode: 'ssh_alias' | 'manual';
+    authMode?: string;
     alias: string;
     configPath: string;
     host: string;
@@ -21,12 +22,13 @@ export interface Profile {
 export interface Mapping {
     id: string;
     localPath: string;
-    remotePath: string
+    deploymentPath: string
 }
 
 export interface ProjectConnection {
     id: string;
     name: string;
+    rootPath: string;
     connection: Connection;
     mappings: Mapping[];
     excludes?: string[]
@@ -93,6 +95,44 @@ export interface BatchPreview {
     fileCount: number
 }
 
+export type TransferStatus = 'waiting' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface QueueItem extends BatchItem {
+    status: TransferStatus | 'skipped';
+    transferredBytes: number;
+    error: string
+}
+
+export interface QueueJob {
+    id: string;
+    projectName: string;
+    direction: 'upload' | 'download';
+    server: string;
+    status: TransferStatus;
+    items: QueueItem[];
+    totalBytes: number;
+    transferredBytes: number;
+    processedItems: number;
+    error: string
+}
+
+export interface QueueState {
+    paused: boolean;
+    jobs: QueueJob[]
+}
+
+export interface NavigationStatus {
+    state: 'disconnected' | 'connecting' | 'connected';
+    projectID: string;
+    connectionID: string
+}
+
+export interface AuthPrompt {
+    id: string;
+    prompt: string;
+    canRemember: boolean;
+}
+
 export interface BatchResult {
     items: {
         relativePath: string;
@@ -144,15 +184,38 @@ interface API {
 
     ListRemote(relative: string): Promise<FileEntry[]>;
 
+    GetNavigationStatus(): Promise<NavigationStatus>;
+
+    DisconnectRemote(): Promise<void>;
+
     PreviewTransfer(direction: string, relative: string): Promise<Preview>;
 
     ExecuteTransfer(token: string, overwrite: boolean): Promise<void>;
 
+    PreviewBatchForServer(projectID: string, connectionID: string, mappingID: string, direction: string, relatives: string[]): Promise<BatchPreview>;
     PreviewBatch(direction: string, relatives: string[]): Promise<BatchPreview>;
 
     ExecuteBatch(token: string, existingPolicy: 'skip' | 'overwrite', includeEnvironment: boolean): Promise<BatchResult>;
 
+    GetQueue(): Promise<QueueState>;
+
+    EnqueueBatch(token: string, policy: 'skip' | 'overwrite', includeEnvironment: boolean): Promise<QueueState>;
+
+    CancelQueueJob(id: string): Promise<void>;
+
+    SetQueuePaused(paused: boolean): Promise<void>;
+
+    ClearFinishedQueue(): Promise<void>;
+
+    PreviewQueueRetry(id: string): Promise<BatchPreview>;
+
     CancelOperation(): Promise<void>;
+
+    GetAuthPrompt?(): Promise<AuthPrompt | null>;
+
+    RespondAuthPrompt?(id: string, answer: string, cancelled: boolean, remember: boolean): Promise<void>;
+
+    ForgetSavedPassword?(projectID: string, connectionID: string): Promise<void>;
 }
 
 declare global {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"awesomeProject/internal/application"
+	"awesomeProject/internal/transport"
 	"context"
 	"embed"
 	"encoding/json"
@@ -17,6 +18,13 @@ import (
 var assets embed.FS
 
 func main() {
+	if handled, err := transport.RunAskpass(); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		showError(err.Error())
 		os.Exit(1)

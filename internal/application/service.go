@@ -3,6 +3,7 @@ package application
 import (
 	"awesomeProject/internal/config"
 	"awesomeProject/internal/transport"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Status struct {
@@ -24,13 +26,24 @@ type Status struct {
 }
 
 type Service struct {
-	mu              sync.Mutex
-	store           *config.Store
-	status          Status
-	operationMu     sync.Mutex
-	cancelOperation func()
-	activeSession   *transport.Session
-	pending         *transferPlan
+	authMu           sync.Mutex
+	authPending      *pendingAuth
+	authClosed       bool
+	mu               sync.Mutex
+	store            *config.Store
+	status           Status
+	operationMu      sync.Mutex
+	cancelOperation  func()
+	activeSession    *transport.Session
+	pending          *transferPlan
+	queue            []*queueEntry
+	queuePaused      bool
+	queueClosed      bool
+	queueWorker      chan struct{}
+	navigation       *navigationSession
+	navigationClosed bool
+	navigationIdle   time.Duration
+	navigationOpen   func(context.Context, string, transport.Connection) (*transport.Session, error)
 }
 
 func New(executable string) (*Service, error) {
@@ -57,7 +70,7 @@ func New(executable string) (*Service, error) {
 		return nil, err
 	}
 	sshPath, sshErr := exec.LookPath("ssh.exe")
-	message := "OpenSSH найден. Доступна авторизация по ключу или SSH-agent."
+	message := "OpenSSH найден. Доступна авторизация по ключу, SSH-agent или паролю через диалог."
 	if sshErr != nil {
 		message = "ssh.exe не найден в PATH. Для следующего этапа потребуется доступный OpenSSH-клиент."
 	}

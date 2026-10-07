@@ -93,3 +93,55 @@ func TestLocalOnlySettingsSelectionAndDefaultValidation(t *testing.T) {
 		t.Fatal("project with servers accepted incomplete active references")
 	}
 }
+
+func TestSchemaTwoMappingMigrationInfersRootWithoutWriting(t *testing.T) {
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := defaultProjectSettings(t)
+	legacy.SchemaVersion = 2
+	legacy.Projects[0].Connections = []ProjectConnection{{ID: "c", Name: "Server", Connection: transport.Connection{Mode: "manual", Host: "example.test", User: "me", Port: 22}, Mappings: []Mapping{{ID: "src", LocalPath: "src", RemotePath: "/srv/app/src"}, {ID: "assets", LocalPath: "assets", RemotePath: "/srv/app/public/assets"}}}}
+	legacy.ActiveConnectionID, legacy.ActiveMappingID = "c", "src"
+	original, err := json.MarshalIndent(legacy, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(store.path(), original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := store.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := settings.Projects[0].Connections[0]
+	if settings.SchemaVersion != SchemaVersion || connection.RootPath != "/srv/app" || connection.Mappings[0].DeploymentPath != "src" || connection.Mappings[1].DeploymentPath != "public/assets" || connection.Mappings[0].RemotePath != "" || settings.Profile.RemoteRoot != "/srv/app/src" {
+		t.Fatalf("unexpected migrated mapping: %+v", settings)
+	}
+	got, err := os.ReadFile(store.path())
+	if err != nil || !bytes.Equal(got, original) {
+		t.Fatal("loading migration rewrote schema-2 settings", err)
+	}
+	if err := store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := os.ReadFile(filepath.Join(store.dir, "settings.json.v2.bak"))
+	if err != nil || !bytes.Equal(backup, original) {
+		t.Fatal("schema-2 backup did not preserve original settings", err)
+	}
+	saved, err := os.ReadFile(store.path())
+	if err != nil || bytes.Contains(saved, []byte(`"remotePath"`)) || !bytes.Contains(saved, []byte(`"rootPath": "/srv/app"`)) {
+		t.Fatalf("save did not write canonical root and deployment mapping: %s, %v", saved, err)
+	}
+}
+
+func TestDeploymentPathsRejectEscapesAndAbsolutePaths(t *testing.T) {
+	for _, candidate := range []string{"../outside", "a/../../outside", "/absolute", `a\\b`, "a\nfile"} {
+		if _, err := ResolveDeploymentPath("/var/www/html", candidate); err == nil {
+			t.Fatalf("accepted unsafe deployment path %q", candidate)
+		}
+	}
+	if got, err := ResolveDeploymentPath("/var/www/html", "public"); err != nil || got != "/var/www/html/public" {
+		t.Fatalf("resolve deployment: %q, %v", got, err)
+	}
+}

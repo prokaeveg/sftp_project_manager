@@ -81,6 +81,83 @@ func (s *Service) PreviewBatch(ctx context.Context, direction string, relatives 
 	profile.Excludes = slices.Clone(profile.Excludes)
 	projectID, connectionID := s.status.Settings.ActiveProjectID, s.status.Settings.ActiveConnectionID
 	s.mu.Unlock()
+	return s.previewBatchWithProfile(ctx, profile, direction, relatives, projectID, connectionID)
+}
+
+// PreviewBatchForServer previews files using the requested project connection
+// and mapping without changing the application's active selection.
+func (s *Service) PreviewBatchForServer(ctx context.Context, projectID, connectionID, mappingID, direction string, relatives []string) (BatchPreview, error) {
+	if direction != "upload" && direction != "download" {
+		return BatchPreview{}, errors.New("неизвестное направление передачи")
+	}
+
+	s.mu.Lock()
+	settings := cloneSettings(s.status.Settings)
+	s.mu.Unlock()
+
+	var project *config.Project
+	var selectedMapping *config.Mapping
+	connectionFound := false
+	for i := range settings.Projects {
+		if settings.Projects[i].ID != projectID {
+			continue
+		}
+		project = &settings.Projects[i]
+		for j := range project.Connections {
+			connection := &project.Connections[j]
+			if connection.ID != connectionID {
+				continue
+			}
+			connectionFound = true
+			for k := range connection.Mappings {
+				if connection.Mappings[k].ID == mappingID {
+					selectedMapping = &connection.Mappings[k]
+					break
+				}
+			}
+			break
+		}
+		break
+	}
+	if project == nil || !connectionFound || selectedMapping == nil {
+		return BatchPreview{}, errors.New("проект, подключение или сопоставление не найдены")
+	}
+
+	// Apply the same project-root containment checks as SelectProject, but only
+	// against this private settings snapshot.
+	root, err := mapping.New(project.LocalRoot, "/")
+	if err != nil {
+		return BatchPreview{}, err
+	}
+	remote, err := root.LocalToRemote(selectedMapping.LocalPath)
+	if err != nil {
+		return BatchPreview{}, err
+	}
+	local, err := root.RemoteToLocal(remote)
+	if err != nil {
+		return BatchPreview{}, err
+	}
+	info, err := os.Stat(local)
+	if err != nil {
+		return BatchPreview{}, err
+	}
+	if !info.IsDir() {
+		return BatchPreview{}, errors.New("выбранная локальная папка должна быть каталогом")
+	}
+
+	settings.ActiveProjectID = projectID
+	settings.ActiveConnectionID = connectionID
+	settings.ActiveMappingID = mappingID
+	configFlatten(&settings)
+	if settings.Profile == nil {
+		return BatchPreview{}, errors.New("проект, подключение или сопоставление не найдены")
+	}
+	profile := *settings.Profile
+	profile.Excludes = slices.Clone(profile.Excludes)
+	return s.previewBatchWithProfile(ctx, profile, direction, relatives, projectID, connectionID)
+}
+
+func (s *Service) previewBatchWithProfile(ctx context.Context, profile config.Profile, direction string, relatives []string, projectID, connectionID string) (BatchPreview, error) {
 	mapper, err := mapping.New(profile.LocalRoot, profile.RemoteRoot)
 	if err != nil {
 		return BatchPreview{}, err
@@ -111,7 +188,7 @@ func (s *Service) PreviewBatch(ctx context.Context, direction string, relatives 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	// A rule edit during enumeration must not resurrect a stale preview.
-	policyUnchanged := false
+	policyUnchanged := projectID == "" // retry explicitly uses the original job snapshot
 	for _, project := range s.status.Settings.Projects {
 		if project.ID == projectID {
 			for _, connection := range project.Connections {
@@ -480,8 +557,12 @@ func (s *Service) ExecuteBatch(ctx context.Context, token, existingPolicy string
 func executeBatch(ctx context.Context, profile config.Profile, plan *batchPlan, policy string, client *sftp.Client) BatchResult {
 	result := BatchResult{Items: make([]BatchItemResult, 0, len(plan.items))}
 	blocked := map[string]bool{}
-	for _, planned := range plan.items {
+	observer, _ := ctx.Value(batchObserverKey{}).(*batchObserver)
+	for index, planned := range plan.items {
 		item := planned.item
+		if observer != nil {
+			observer.start(index)
+		}
 		entry := BatchItemResult{RelativePath: item.RelativePath, Kind: item.Kind}
 		if err := ctx.Err(); err != nil {
 			entry.Status, entry.Error = "cancelled", err.Error()
@@ -499,7 +580,11 @@ func executeBatch(ctx context.Context, profile config.Profile, plan *batchPlan, 
 				}
 			}
 			if err == nil {
-				err = executeBatchItem(ctx, profile, plan.preview.Direction, planned, policy, client)
+				itemCtx := ctx
+				if observer != nil {
+					itemCtx = transfer.WithProgress(ctx, func(bytes int64) { observer.progress(index, bytes) })
+				}
+				err = executeBatchItem(itemCtx, profile, plan.preview.Direction, planned, policy, client)
 			}
 			switch {
 			case err == nil:
@@ -518,6 +603,9 @@ func executeBatch(ctx context.Context, profile config.Profile, plan *batchPlan, 
 			}
 		}
 		result.Items = append(result.Items, entry)
+		if observer != nil {
+			observer.finish(index, entry)
+		}
 	}
 	return result
 }

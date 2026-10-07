@@ -13,7 +13,11 @@ try {
         (Join-Path $projectRoot 'docs/proxy-connections.md'),
         (Join-Path $projectRoot 'docs/exclusions.md'),
         (Join-Path $projectRoot 'docs/file-trees.md'),
+        (Join-Path $projectRoot 'docs/remote-navigation.md'),
+        (Join-Path $projectRoot 'docs/root-deployment.md'),
+        (Join-Path $projectRoot 'docs/password-auth.md'),
         (Join-Path $projectRoot 'docs/batch-transfers.md'),
+        (Join-Path $projectRoot 'docs/transfer-queue.md'),
         (Join-Path $projectRoot 'docs/ide-workspace.md'),
         (Join-Path $projectRoot 'README.md')
     )

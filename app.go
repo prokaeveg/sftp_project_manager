@@ -75,6 +75,10 @@ func (a *App) ListProjectLocal(relative string) ([]application.FileEntry, error)
 func (a *App) ListRemote(relative string) ([]application.FileEntry, error) {
 	return a.service.ListRemote(a.ctx, relative)
 }
+func (a *App) GetNavigationStatus() application.NavigationStatus {
+	return a.service.GetNavigationStatus()
+}
+func (a *App) DisconnectRemote() { a.service.DisconnectRemote() }
 func (a *App) PreviewTransfer(direction, relative string) (application.Preview, error) {
 	return a.service.PreviewTransfer(direction, relative)
 }
@@ -84,10 +88,29 @@ func (a *App) ExecuteTransfer(token string, overwrite bool) error {
 func (a *App) PreviewBatch(direction string, relatives []string) (application.BatchPreview, error) {
 	return a.service.PreviewBatch(a.ctx, direction, relatives)
 }
+func (a *App) PreviewBatchForServer(projectID, connectionID, mappingID, direction string, relatives []string) (application.BatchPreview, error) {
+	return a.service.PreviewBatchForServer(a.ctx, projectID, connectionID, mappingID, direction, relatives)
+}
 func (a *App) ExecuteBatch(token string, existingPolicy string, includeEnvironment bool) (application.BatchResult, error) {
 	return a.service.ExecuteBatch(a.ctx, token, existingPolicy, includeEnvironment)
 }
 func (a *App) CancelOperation() { a.service.CancelOperation() }
+
+func (a *App) GetAuthPrompt() *application.AuthPrompt { return a.service.GetAuthPrompt() }
+func (a *App) RespondAuthPrompt(id, answer string, cancelled bool) error {
+	return a.service.RespondAuthPrompt(id, answer, cancelled)
+}
+
+func (a *App) GetQueue() application.QueueState { return a.service.GetQueue() }
+func (a *App) EnqueueBatch(token, policy string, includeEnvironment bool) (application.QueueState, error) {
+	return a.service.EnqueueBatch(a.ctx, token, policy, includeEnvironment)
+}
+func (a *App) CancelQueueJob(id string) error { return a.service.CancelQueueJob(id) }
+func (a *App) SetQueuePaused(paused bool)     { a.service.SetQueuePaused(paused) }
+func (a *App) ClearFinishedQueue()            { a.service.ClearFinishedQueue() }
+func (a *App) PreviewQueueRetry(id string) (application.BatchPreview, error) {
+	return a.service.PreviewQueueRetry(a.ctx, id)
+}
 
 func (a *App) DiscoverSSH(configPath string) (sshconfig.Result, error) {
 	return a.service.DiscoverSSH(configPath)

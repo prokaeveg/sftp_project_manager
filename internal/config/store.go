@@ -11,9 +11,10 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
-const SchemaVersion = 2
+const SchemaVersion = 3
 
 type Settings struct {
 	SchemaVersion      int       `json:"schemaVersion"`
@@ -36,13 +37,15 @@ type ProjectConnection struct {
 	ID         string               `json:"id"`
 	Name       string               `json:"name"`
 	Connection transport.Connection `json:"connection"`
+	RootPath   string               `json:"rootPath"`
 	Mappings   []Mapping            `json:"mappings"`
 	Excludes   []string             `json:"excludes,omitempty"`
 }
 type Mapping struct {
-	ID         string `json:"id"`
-	LocalPath  string `json:"localPath"`
-	RemotePath string `json:"remotePath"`
+	ID             string `json:"id"`
+	LocalPath      string `json:"localPath"`
+	DeploymentPath string `json:"deploymentPath"`
+	RemotePath     string `json:"remotePath,omitempty"` // Deprecated schema-1/2 compatibility.
 }
 
 type Profile struct {
@@ -55,6 +58,139 @@ type Profile struct {
 }
 
 func Default() Settings { return Settings{SchemaVersion: SchemaVersion, Projects: []Project{}} }
+
+// NormalizeProject migrates legacy absolute mapping destinations into a
+// connection root plus paths relative to that root. It returns a copy and
+// clears deprecated RemotePath values so subsequent saves are canonical.
+func NormalizeProject(project Project) (Project, error) {
+	project.Connections = append([]ProjectConnection(nil), project.Connections...)
+	for ci := range project.Connections {
+		connection := &project.Connections[ci]
+		connection.Mappings = append([]Mapping(nil), connection.Mappings...)
+		legacy := false
+		for _, m := range connection.Mappings {
+			if m.RemotePath != "" {
+				legacy = true
+				break
+			}
+		}
+		if legacy {
+			remotePaths := make([]string, len(connection.Mappings))
+			for i, m := range connection.Mappings {
+				if strings.TrimSpace(m.RemotePath) == "" || !validAbsolutePOSIX(m.RemotePath) {
+					return Project{}, fmt.Errorf("connection %q has invalid legacy remote path", connection.Name)
+				}
+				remotePaths[i] = path.Clean(m.RemotePath)
+			}
+			if connection.RootPath == "" {
+				connection.RootPath = commonRemoteAncestor(remotePaths)
+			} else if err := ValidateRootPath(connection.RootPath); err != nil {
+				return Project{}, fmt.Errorf("connection %q: %w", connection.Name, err)
+			}
+			root := path.Clean(connection.RootPath)
+			for i := range connection.Mappings {
+				remote := remotePaths[i]
+				deployment := ""
+				if remote == root {
+					deployment = "."
+				} else if root == "/" {
+					deployment = strings.TrimPrefix(remote, "/")
+				} else if strings.HasPrefix(remote, root+"/") {
+					deployment = strings.TrimPrefix(remote, root+"/")
+				} else {
+					return Project{}, fmt.Errorf("connection %q legacy remote path %q is outside rootPath %q", connection.Name, remote, root)
+				}
+				connection.Mappings[i].DeploymentPath = deployment
+			}
+		}
+		for i := range connection.Mappings {
+			m := &connection.Mappings[i]
+			if m.DeploymentPath == "" {
+				m.DeploymentPath = "."
+			}
+			m.RemotePath = ""
+		}
+		if len(connection.Mappings) > 0 {
+			if err := ValidateRootPath(connection.RootPath); err != nil {
+				return Project{}, fmt.Errorf("connection %q: %w", connection.Name, err)
+			}
+		}
+	}
+	return project, nil
+}
+
+// ValidateRootPath accepts absolute POSIX server paths only.
+func ValidateRootPath(rootPath string) error {
+	if !validAbsolutePOSIX(rootPath) {
+		return errors.New("server root path must be an absolute POSIX path")
+	}
+	return nil
+}
+
+// ResolveDeploymentPath joins a server root with a safe relative deployment
+// path. The returned path is always absolute and remains under rootPath.
+func ResolveDeploymentPath(rootPath, deploymentPath string) (string, error) {
+	if err := ValidateRootPath(rootPath); err != nil {
+		return "", err
+	}
+	if !validDeploymentPath(deploymentPath) {
+		return "", errors.New("deployment path must be a safe relative POSIX path")
+	}
+	rootPath = path.Clean(rootPath)
+	if deploymentPath == "." {
+		return rootPath, nil
+	}
+	return path.Join(rootPath, deploymentPath), nil
+}
+
+func validAbsolutePOSIX(value string) bool {
+	if !path.IsAbs(value) || strings.ContainsRune(value, '\\') || hasDotDot(value) || hasControl(value) {
+		return false
+	}
+	return path.Clean(value) == value || strings.TrimSuffix(value, "/") == path.Clean(value)
+}
+
+func validDeploymentPath(value string) bool {
+	if value == "." {
+		return true
+	}
+	if value == "" || path.IsAbs(value) || strings.ContainsRune(value, '\\') || hasDotDot(value) || hasControl(value) {
+		return false
+	}
+	return path.Clean(value) == value && !strings.HasPrefix(value, "../")
+}
+
+func hasControl(value string) bool {
+	for _, r := range value {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
+}
+
+func commonRemoteAncestor(paths []string) string {
+	if len(paths) == 1 {
+		return paths[0]
+	}
+	segments := strings.Split(strings.TrimPrefix(paths[0], "/"), "/")
+	for _, candidate := range paths[1:] {
+		other := strings.Split(strings.TrimPrefix(candidate, "/"), "/")
+		limit := len(segments)
+		if len(other) < limit {
+			limit = len(other)
+		}
+		i := 0
+		for i < limit && segments[i] == other[i] {
+			i++
+		}
+		segments = segments[:i]
+	}
+	if len(segments) == 0 {
+		return "/"
+	}
+	return "/" + strings.Join(segments, "/")
+}
 
 func validateSettings(settings Settings) error {
 	if settings.SchemaVersion != SchemaVersion {
@@ -89,7 +225,10 @@ func validateSettings(settings Settings) error {
 					return errors.New("invalid or duplicate mapping ID")
 				}
 				mappings[m.ID] = true
-				if strings.TrimSpace(m.LocalPath) == "" || filepath.IsAbs(m.LocalPath) || filepath.VolumeName(m.LocalPath) != "" || strings.TrimSpace(m.RemotePath) == "" || !path.IsAbs(m.RemotePath) || strings.ContainsRune(m.RemotePath, '\\') || hasDotDot(m.LocalPath) || hasDotDot(m.RemotePath) {
+				if strings.TrimSpace(m.LocalPath) == "" || filepath.IsAbs(m.LocalPath) || filepath.VolumeName(m.LocalPath) != "" || hasDotDot(m.LocalPath) || m.RemotePath != "" {
+					return errors.New("invalid mapping structure")
+				}
+				if _, err := ResolveDeploymentPath(c.RootPath, m.DeploymentPath); err != nil {
 					return errors.New("invalid mapping structure")
 				}
 			}
@@ -170,7 +309,11 @@ func flatten(settings *Settings) {
 					if base == "." {
 						base = ""
 					}
-					settings.Profile = &Profile{Name: p.Name, LocalRoot: local, RemoteRoot: m.RemotePath, Connection: c.Connection, Excludes: append([]string(nil), c.Excludes...), ExcludeBase: base}
+					remote, err := ResolveDeploymentPath(c.RootPath, m.DeploymentPath)
+					if err != nil {
+						return
+					}
+					settings.Profile = &Profile{Name: p.Name, LocalRoot: local, RemoteRoot: remote, Connection: c.Connection, Excludes: append([]string(nil), c.Excludes...), ExcludeBase: base}
 					return
 				}
 			}
@@ -191,7 +334,7 @@ func migrateLegacy(data []byte) (Settings, error) {
 	s.ProjectName = old.ProjectName
 	s.Profile = old.Profile
 	if old.Profile != nil {
-		s.Projects = []Project{{ID: "legacy-project", Name: old.Profile.Name, LocalRoot: old.Profile.LocalRoot, Connections: []ProjectConnection{{ID: "legacy-connection", Name: "Основное подключение", Connection: old.Profile.Connection, Mappings: []Mapping{{ID: "legacy-mapping", LocalPath: ".", RemotePath: old.Profile.RemoteRoot}}}}}}
+		s.Projects = []Project{{ID: "legacy-project", Name: old.Profile.Name, LocalRoot: old.Profile.LocalRoot, Connections: []ProjectConnection{{ID: "legacy-connection", Name: "Основное подключение", Connection: old.Profile.Connection, RootPath: old.Profile.RemoteRoot, Mappings: []Mapping{{ID: "legacy-mapping", LocalPath: ".", DeploymentPath: "."}}}}}}
 		s.ActiveProjectID = "legacy-project"
 		s.ActiveConnectionID = "legacy-connection"
 		s.ActiveMappingID = "legacy-mapping"
@@ -238,8 +381,26 @@ func decode(data []byte) (Settings, error) {
 		if err != nil {
 			return Settings{}, err
 		}
+	} else if settings.SchemaVersion == 2 {
+		for i := range settings.Projects {
+			project, err := NormalizeProject(settings.Projects[i])
+			if err != nil {
+				return Settings{}, fmt.Errorf("invalid schema-2 project: %w", err)
+			}
+			settings.Projects[i] = project
+		}
+		settings.SchemaVersion = SchemaVersion
 	} else if settings.SchemaVersion != SchemaVersion {
 		return Settings{}, fmt.Errorf("неподдерживаемая версия настроек: %d", settings.SchemaVersion)
+	}
+	if settings.SchemaVersion == SchemaVersion {
+		for i := range settings.Projects {
+			project, err := NormalizeProject(settings.Projects[i])
+			if err != nil {
+				return Settings{}, fmt.Errorf("invalid project: %w", err)
+			}
+			settings.Projects[i] = project
+		}
 	}
 	if settings.Projects == nil {
 		settings.Projects = []Project{}
@@ -264,6 +425,14 @@ func (s *Store) Load() (Settings, error) {
 }
 
 func (s *Store) Save(settings Settings) error {
+	settings.Projects = append([]Project(nil), settings.Projects...)
+	for i := range settings.Projects {
+		project, err := NormalizeProject(settings.Projects[i])
+		if err != nil {
+			return err
+		}
+		settings.Projects[i] = project
+	}
 	if err := validateSettings(settings); err != nil {
 		return err
 	}
@@ -288,8 +457,8 @@ func (s *Store) Save(settings Settings) error {
 		if err := s.replace(backup, old); err != nil {
 			return fmt.Errorf("резервная копия настроек: %w", err)
 		}
-		if version.SchemaVersion == 1 {
-			if err := s.replace("settings.json.v1.bak", old); err != nil {
+		if version.SchemaVersion == 1 || version.SchemaVersion == 2 {
+			if err := s.replace(fmt.Sprintf("settings.json.v%d.bak", version.SchemaVersion), old); err != nil {
 				return fmt.Errorf("legacy settings backup: %w", err)
 			}
 		}

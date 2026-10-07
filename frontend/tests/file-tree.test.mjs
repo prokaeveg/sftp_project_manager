@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { treeRoot, treeNode, toggleDirectory, loadDirectory, selectEntry, toMappingPath } from '../src/file-tree.ts'
+import { treeRoot, treeNode, toggleDirectory, loadDirectory, selectEntry, selectTreeEntry, toMappingPath, fromDeploymentPath } from '../src/file-tree.ts'
 
 const folder = (name, relativePath = name) => ({ name, relativePath, size: 0, isDir: true, isLink: false, excluded: false })
 const file = (name, relativePath = name) => ({ ...folder(name, relativePath), isDir: false, size: 12 })
@@ -29,6 +29,39 @@ test('excluded items and links cannot enter a selection; panels are independent'
  selectEntry(local, file('ok'), false)
  assert.deepEqual([...local], [])
  assert.deepEqual([...remote], ['ok'])
+})
+
+test('tree selection supports plain, Ctrl, and visible Shift ranges', async () => {
+ const root = treeRoot(), selection = new Set()
+ await loadDirectory(root, async () => [folder('src'), file('readme')])
+ await loadDirectory(root.children[0], async () => [file('main', 'src/main'), file('test', 'src/test')])
+ const [src, readme] = root.children
+ const [main, testFile] = src.children
+ let anchor = selectTreeEntry(selection, root, src.entry, {}, null)
+ anchor = selectTreeEntry(selection, root, readme.entry, { ctrlKey: true }, anchor)
+ assert.deepEqual([...selection], ['src', 'readme'])
+ anchor = selectTreeEntry(selection, root, main.entry, { shiftKey: true }, anchor)
+ assert.deepEqual([...selection], ['src', 'src/main'])
+ selectTreeEntry(selection, root, testFile.entry, { ctrlKey: true, shiftKey: true }, anchor)
+ assert.deepEqual([...selection], ['src', 'src/main', 'src/test'])
+
+ await toggleDirectory(src, async () => {})
+ selectTreeEntry(selection, root, testFile.entry, {}, anchor)
+ assert.deepEqual([...selection], ['src', 'src/main', 'src/test'])
+})
+
+test('tree selection ignores links and excluded paths, and Ctrl toggles the clicked entry', async () => {
+ const root = treeRoot(), selection = new Set()
+ await loadDirectory(root, async () => [file('one'), file('two')])
+ const [one, two] = root.children
+ let anchor = selectTreeEntry(selection, root, one.entry, {}, null)
+ anchor = selectTreeEntry(selection, root, one.entry, { metaKey: true }, anchor)
+ assert.deepEqual([...selection], [])
+ selectTreeEntry(selection, root, two.entry, { ctrlKey: true }, anchor)
+ assert.deepEqual([...selection], ['two'])
+ selectTreeEntry(selection, root, { ...file('excluded'), excluded: true }, {}, anchor)
+ selectTreeEntry(selection, root, { ...file('link'), isLink: true }, {}, anchor)
+ assert.deepEqual([...selection], ['two'])
 })
 
 test('loads only expanded directories and reuses cached branches', async () => {
@@ -122,4 +155,19 @@ test('upload paths are mapped relative to the selected local mapping with bounda
  assert.throws(() => toMappingPath('.', 'src'), /вне маппинга/)
  assert.throws(() => toMappingPath('../secret', '.'), /выходит за пределы проекта/)
  assert.throws(() => toMappingPath('C:/outside/file', '.'), /не относится к папке проекта/)
+})
+
+test('server-root paths translate through nested deployments into project paths', () => {
+ assert.equal(fromDeploymentPath('sites/shop/src/main.ts', 'sites/shop', 'web'), 'web/src/main.ts')
+ assert.equal(fromDeploymentPath('sites/shop', 'sites/shop', 'web'), 'web')
+ assert.equal(fromDeploymentPath('.env.local', '.', '.'), '.env.local')
+ assert.equal(fromDeploymentPath('.git/config', '.', 'src'), 'src/.git/config')
+ assert.throws(() => fromDeploymentPath('sites/shop-old/file', 'sites/shop', 'web'), /вне маппинга/)
+ assert.throws(() => fromDeploymentPath('unrelated/file', 'sites/shop', 'web'), /вне маппинга/)
+})
+
+test('server-root translation rejects absolute and traversal paths', () => {
+ assert.throws(() => fromDeploymentPath('../secret', '.', '.'), /выходит за пределы корня/)
+ assert.throws(() => fromDeploymentPath('C:/outside/file', '.', '.'), /должен быть относительным/)
+ assert.throws(() => fromDeploymentPath('safe/file', '../outside', '.'), /выходит за пределы корня/)
 })

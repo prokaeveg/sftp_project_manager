@@ -9,7 +9,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -191,7 +190,7 @@ func startManaged(ctx context.Context, executable string, args []string, pipeInp
 		cleanHandles()
 		return nil, err
 	}
-	env := managedEnvironment()
+	env := managedEnvironment(ctx)
 	environment := utf16.Encode([]rune(strings.Join(env, "\x00") + "\x00\x00"))
 	var pi windows.ProcessInformation
 	flags := uint32(windows.CREATE_SUSPENDED | windows.CREATE_UNICODE_ENVIRONMENT | windows.EXTENDED_STARTUPINFO_PRESENT | windows.CREATE_NO_WINDOW)
@@ -306,23 +305,6 @@ func closeHandle(handle windows.Handle) {
 	if handle != 0 && handle != windows.InvalidHandle {
 		_ = windows.CloseHandle(handle)
 	}
-}
-
-func managedEnvironment() []string {
-	values := make(map[string]string)
-	for _, entry := range os.Environ() {
-		key, value, ok := strings.Cut(entry, "=")
-		if ok && !strings.EqualFold(key, "SSH_ASKPASS_REQUIRE") {
-			values[strings.ToUpper(key)] = key + "=" + value
-		}
-	}
-	values["SSH_ASKPASS_REQUIRE"] = "SSH_ASKPASS_REQUIRE=never"
-	env := make([]string, 0, len(values))
-	for _, entry := range values {
-		env = append(env, entry)
-	}
-	sort.Slice(env, func(i, j int) bool { return strings.ToUpper(env[i]) < strings.ToUpper(env[j]) })
-	return env
 }
 
 func hideWindow(command *exec.Cmd) {

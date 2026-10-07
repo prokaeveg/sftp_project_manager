@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 )
 
 type Connection struct {
+	AuthMode       string `json:"authMode,omitempty"`
 	Mode           string `json:"mode"`
 	Alias          string `json:"alias"`
 	ConfigPath     string `json:"configPath"`
@@ -25,11 +27,24 @@ type Connection struct {
 	KnownHostsFile string `json:"knownHostsFile"`
 }
 
+type authPromptKey struct{}
+
+// WithAuthPrompt attaches the interactive SSH prompt handler to a context.
+// The callback is only consulted when AuthMode is password or interactive.
+func WithAuthPrompt(ctx context.Context, callback func(context.Context, string) (string, error)) context.Context {
+	return context.WithValue(ctx, authPromptKey{}, callback)
+}
+
 func validToken(value string) bool {
 	return value != "" && !strings.HasPrefix(value, "-") && !strings.ContainsAny(value, " \t\r\n\x00")
 }
 
 func (c Connection) Validate() error {
+	switch c.AuthMode {
+	case "", "key_agent", "password", "interactive":
+	default:
+		return errors.New("unknown SSH authentication mode")
+	}
 	if c.Mode == "ssh_alias" {
 		if !validToken(c.Alias) {
 			return errors.New("укажите конкретный SSH-алиас")
@@ -62,6 +77,17 @@ func Arguments(c Connection) ([]string, error) {
 		return nil, err
 	}
 	args := []string{"-T", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "UpdateHostKeys=no", "-o", "ConnectTimeout=10", "-o", "ConnectionAttempts=1", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2", "-o", "ProxyJump=none", "-o", "ProxyCommand=none", "-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ForwardAgent=no", "-o", "ClearAllForwardings=yes", "-o", "PermitLocalCommand=no", "-o", "LogLevel=INFO"}
+	switch c.AuthMode {
+	case "", "key_agent":
+	case "password":
+		args = replaceOption(args, "BatchMode", "no")
+		args = append(args, "-o", "PreferredAuthentications=password", "-o", "NumberOfPasswordPrompts=3", "-o", "PubkeyAuthentication=no", "-o", "KbdInteractiveAuthentication=no")
+	case "interactive":
+		args = replaceOption(args, "BatchMode", "no")
+		args = append(args, "-o", "PreferredAuthentications=publickey,keyboard-interactive,password", "-o", "NumberOfPasswordPrompts=3", "-o", "PubkeyAuthentication=yes", "-o", "KbdInteractiveAuthentication=yes")
+	default:
+		return nil, errors.New("unknown SSH authentication mode")
+	}
 	if c.Mode == "ssh_alias" && supportsConfigProxy() {
 		args = removeProxyOverrides(args)
 	}
@@ -82,6 +108,16 @@ func Arguments(c Connection) ([]string, error) {
 		target = c.Host
 	}
 	return append(args, "-s", "--", target, "sftp"), nil
+}
+
+func replaceOption(args []string, key, value string) []string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-o" && strings.HasPrefix(args[i+1], key+"=") {
+			args[i+1] = key + "=" + value
+			return args
+		}
+	}
+	return args
 }
 
 type diagnostics struct {
@@ -106,7 +142,7 @@ func (d *diagnostics) message() string {
 	case strings.Contains(value, "host key verification failed"), strings.Contains(value, "host identification has changed"):
 		return "ключ сервера неизвестен или изменился; проверьте отпечаток и known_hosts вручную. Подключение остановлено"
 	case strings.Contains(value, "permission denied"):
-		return "SSH-авторизация не удалась: нужен доступный ключ или SSH-agent; пароль, passphrase и MFA интерактивно не поддерживаются"
+		return "SSH-авторизация не удалась: проверьте выбранный способ входа, пользователя и данные авторизации"
 	case strings.Contains(value, "could not resolve"), strings.Contains(value, "connect to host"), strings.Contains(value, "connection refused"), strings.Contains(value, "connection reset"), strings.Contains(value, "timed out"), strings.Contains(value, "network is unreachable"):
 		return "сервер недоступен: проверьте host, порт и сеть"
 	default:
@@ -119,6 +155,7 @@ type Session struct {
 	process *managedProcess
 	cancel  context.CancelFunc
 	once    sync.Once
+	broker  *authBroker
 }
 
 func Open(ctx context.Context, executable string, connection Connection) (*Session, error) {
@@ -133,27 +170,79 @@ func Open(ctx context.Context, executable string, connection Connection) (*Sessi
 		return nil, errors.New("подключения по SSH-алиасу доступны только в Windows-сборке")
 	}
 	childCtx, cancel := context.WithCancel(ctx)
+	var broker *authBroker
+	if connection.AuthMode == "password" || connection.AuthMode == "interactive" {
+		callback, _ := ctx.Value(authPromptKey{}).(func(context.Context, string) (string, error))
+		if callback == nil {
+			cancel()
+			return nil, errors.New("SSH authentication prompt handler is unavailable")
+		}
+		broker, err = newAuthBroker(childCtx, callback)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		helperExecutable, helperErr := os.Executable()
+		if helperErr != nil {
+			broker.Close()
+			cancel()
+			return nil, errors.New("could not locate the application for SSH authentication prompts")
+		}
+		childCtx = broker.context(helperExecutable)
+	}
 	var diagnostic diagnostics
 	process, err := startManaged(childCtx, executable, args, true, &diagnostic)
 	if err != nil {
+		if broker != nil {
+			broker.Close()
+		}
 		cancel()
 		return nil, fmt.Errorf("не удалось запустить OpenSSH: %w", err)
 	}
 	client, err := sftp.NewClientPipe(process.Output, process.Input)
 	if err != nil {
+		cancelErr := childCtx.Err()
 		_ = process.Close()
+		if broker != nil {
+			broker.Close()
+		}
 		cancel()
+		if cancelErr != nil {
+			return nil, cancelErr
+		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
 		}
 		return nil, errors.New(diagnostic.message())
 	}
-	return &Session{Client: client, process: process, cancel: cancel}, nil
+	return &Session{Client: client, process: process, cancel: cancel, broker: broker}, nil
 }
 
 // Close interrupts I/O and reaps the SSH process. It is safe to call repeatedly.
 func (s *Session) Close() {
-	s.once.Do(func() { s.cancel(); _ = s.process.Close(); _ = s.Client.Close() })
+	s.once.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.broker != nil {
+			s.broker.Close()
+		}
+		if s.process != nil {
+			_ = s.process.Close()
+		}
+		if s.Client != nil {
+			_ = s.Client.Close()
+		}
+	})
+}
+
+// Done closes when the managed SSH process has exited and its children were
+// reaped. Client-only sessions have no process notification.
+func (s *Session) Done() <-chan struct{} {
+	if s.process == nil {
+		return nil
+	}
+	return s.process.Done
 }
 
 func removeProxyOverrides(args []string) []string {

@@ -41,6 +41,17 @@ func TestProxyAppProcessHelper(t *testing.T) {
 }
 
 func TestShutdownReapsProxyDuringHandshake(t *testing.T) {
+	navigationProxyHandshakeStops(t, "shutdown")
+}
+
+func TestNavigationCancelAndDisconnectReapProxyDuringHandshake(t *testing.T) {
+	for _, action := range []string{"cancel", "disconnect"} {
+		t.Run(action, func(t *testing.T) { navigationProxyHandshakeStops(t, action) })
+	}
+}
+
+func navigationProxyHandshakeStops(t *testing.T, action string) {
+	t.Helper()
 	if _, err := exec.LookPath("ssh.exe"); err != nil {
 		t.Skip("Windows OpenSSH unavailable")
 	}
@@ -103,7 +114,17 @@ func TestShutdownReapsProxyDuringHandshake(t *testing.T) {
 		defer windows.CloseHandle(handle)
 	}
 	shutdownDone := make(chan struct{})
-	go func() { s.Shutdown(); close(shutdownDone) }()
+	go func() {
+		switch action {
+		case "cancel":
+			s.CancelOperation()
+		case "disconnect":
+			s.DisconnectRemote()
+		default:
+			s.Shutdown()
+		}
+		close(shutdownDone)
+	}()
 	select {
 	case <-shutdownDone:
 	case <-time.After(5 * time.Second):
@@ -112,6 +133,9 @@ func TestShutdownReapsProxyDuringHandshake(t *testing.T) {
 	}
 	if err := <-finished; !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected cancelled handshake, got %v", err)
+	}
+	if s.GetNavigationStatus().State != "disconnected" {
+		t.Fatal("cancelled proxy connection was retained")
 	}
 	for _, handle := range handles {
 		state, err := windows.WaitForSingleObject(handle, 5000)

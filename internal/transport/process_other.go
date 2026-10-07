@@ -54,7 +54,7 @@ func startManaged(ctx context.Context, executable string, args []string, pipeInp
 	}
 	cmd := exec.CommandContext(ctx, executable, args...)
 	hideWindow(cmd)
-	cmd.Env = append(cmd.Environ(), "SSH_ASKPASS_REQUIRE=never")
+	cmd.Env = managedEnvironment(ctx)
 	if stderr != nil {
 		cmd.Stderr = stderr
 	}

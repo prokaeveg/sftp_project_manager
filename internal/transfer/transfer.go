@@ -22,6 +22,14 @@ const copyChunkSize = 64 * 1024
 
 const posixRenameExtension = "posix-rename@openssh.com"
 
+type progressKey struct{}
+
+// WithProgress reports bytes accepted by the destination writer. The callback
+// is synchronous and does not indicate that the temporary file was committed.
+func WithProgress(ctx context.Context, report func(int64)) context.Context {
+	return context.WithValue(ctx, progressKey{}, report)
+}
+
 // CheckRemotePath verifies that an absolute remote directory exists and that
 // every component from the POSIX root through the target is a real directory,
 // not a symbolic link. It is suitable for validating a directory before
@@ -317,6 +325,9 @@ func copyContext(ctx context.Context, dst io.Writer, src io.Reader) error {
 				}
 				m, writeErr := dst.Write(buf[written:n])
 				written += m
+				if report, ok := ctx.Value(progressKey{}).(func(int64)); ok && m > 0 {
+					report(int64(m))
+				}
 				if writeErr != nil {
 					return fmt.Errorf("write transfer data: %w", writeErr)
 				}

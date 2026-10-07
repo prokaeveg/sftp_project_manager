@@ -446,3 +446,74 @@ func TestBatchPreviewEnforcesExclusionsBeforeConnecting(t *testing.T) {
 		t.Fatalf("excluded preview attempted connection: %v", err)
 	}
 }
+
+func batchServerPreviewFixture(t *testing.T) (*Service, string, string, string, string, string) {
+	t.Helper()
+	service, err := New(filepath.Join(t.TempDir(), "app.exe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	localRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(localRoot, "src"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	project := config.Project{Name: "Preview", LocalRoot: localRoot, Connections: []config.ProjectConnection{
+		{Name: "First", Connection: transport.Connection{Mode: "manual", Host: "first.invalid", User: "test", Port: 22}, Mappings: []config.Mapping{{LocalPath: "src", RemotePath: "/first"}}},
+		{Name: "Second", Connection: transport.Connection{Mode: "manual", Host: "second.invalid", User: "test", Port: 22}, Mappings: []config.Mapping{{LocalPath: "src", RemotePath: "/second"}}},
+	}}
+	status, err := service.SaveProject(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project = status.Settings.Projects[0]
+	return service, project.ID, project.Connections[0].ID, project.Connections[0].Mappings[0].ID, project.Connections[1].ID, project.Connections[1].Mappings[0].ID
+}
+
+func TestPreviewBatchForServerValidatesIDsAndDirection(t *testing.T) {
+	service, projectID, connectionID, mappingID, _, _ := batchServerPreviewFixture(t)
+	if _, err := service.PreviewBatchForServer(context.Background(), projectID, connectionID, mappingID, "sync", []string{"file.txt"}); err == nil {
+		t.Fatal("unknown batch direction accepted")
+	}
+	if _, err := service.PreviewBatchForServer(context.Background(), "unknown", connectionID, mappingID, "upload", []string{"file.txt"}); err == nil {
+		t.Fatal("unknown project ID accepted")
+	}
+	if _, err := service.PreviewBatchForServer(context.Background(), projectID, "unknown", mappingID, "upload", []string{"file.txt"}); err == nil {
+		t.Fatal("unknown connection ID accepted")
+	}
+	if _, err := service.PreviewBatchForServer(context.Background(), projectID, connectionID, "unknown", "upload", []string{"file.txt"}); err == nil {
+		t.Fatal("unknown mapping ID accepted")
+	}
+}
+
+func TestPreviewBatchForServerLeavesActiveSelectionUnchanged(t *testing.T) {
+	service, projectID, activeConnectionID, activeMappingID, otherConnectionID, otherMappingID := batchServerPreviewFixture(t)
+	service.status.SSHPath = "missing-ssh-executable.exe"
+	before := service.Status().Settings
+	if _, err := service.PreviewBatchForServer(context.Background(), projectID, otherConnectionID, otherMappingID, "upload", []string{"file.txt"}); err == nil {
+		t.Fatal("preview unexpectedly connected without an SSH executable")
+	}
+	after := service.Status().Settings
+	if after.ActiveProjectID != before.ActiveProjectID || after.ActiveConnectionID != before.ActiveConnectionID || after.ActiveMappingID != before.ActiveMappingID {
+		t.Fatalf("active selection changed: before (%q, %q, %q), after (%q, %q, %q)", before.ActiveProjectID, before.ActiveConnectionID, before.ActiveMappingID, after.ActiveProjectID, after.ActiveConnectionID, after.ActiveMappingID)
+	}
+	if before.ActiveConnectionID != activeConnectionID || before.ActiveMappingID != activeMappingID {
+		t.Fatalf("fixture active selection changed unexpectedly: %+v", before)
+	}
+}
+
+func TestPreviewBatchForServerRejectsMappingOutsideProject(t *testing.T) {
+	service, projectID, connectionID, mappingID, _, _ := batchServerPreviewFixture(t)
+	service.mu.Lock()
+	for i := range service.status.Settings.Projects {
+		project := &service.status.Settings.Projects[i]
+		if project.ID == projectID {
+			project.Connections[0].Mappings[0].LocalPath = "../outside"
+			break
+		}
+	}
+	service.mu.Unlock()
+	service.status.SSHPath = "missing-ssh-executable.exe"
+	if _, err := service.PreviewBatchForServer(context.Background(), projectID, connectionID, mappingID, "upload", []string{"file.txt"}); err == nil {
+		t.Fatal("mapping outside project root accepted")
+	}
+}

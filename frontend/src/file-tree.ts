@@ -22,6 +22,55 @@ export function selectEntry(selection: Set<string>, entry: FileEntry, checked: b
  else selection.delete(entry.relativePath)
 }
 
+export type TreeSelectionEvent = Pick<MouseEvent | KeyboardEvent, 'ctrlKey' | 'metaKey' | 'shiftKey'>
+
+/**
+ * Select a visible tree entry using the usual plain, Ctrl/Cmd, and Shift rules.
+ * The returned path is the anchor to pass to the next call.
+ */
+export function selectTreeEntry(
+ selection: Set<string>,
+ root: TreeNode,
+ entry: FileEntry,
+ event: TreeSelectionEvent,
+ anchor: string | null = null
+): string | null {
+ if (entry.isLink || entry.excluded) return anchor
+
+ const visible: FileEntry[] = []
+ const visit = (node: TreeNode) => {
+  visible.push(node.entry)
+  if (node.expanded) node.children.forEach(visit)
+ }
+ visit(root)
+
+ const targetIndex = visible.findIndex(item => item.relativePath === entry.relativePath)
+ if (targetIndex < 0) return anchor
+
+ const additive = event.ctrlKey || event.metaKey
+ if (event.shiftKey) {
+  const anchorIndex = anchor == null ? -1 : visible.findIndex(item => item.relativePath === anchor)
+  const start = anchorIndex < 0 ? targetIndex : Math.min(anchorIndex, targetIndex)
+  const end = anchorIndex < 0 ? targetIndex : Math.max(anchorIndex, targetIndex)
+  if (!additive) selection.clear()
+  for (let index = start; index <= end; index++) {
+   const item = visible[index]
+   if (!item.isLink && !item.excluded) selection.add(item.relativePath)
+  }
+  return anchorIndex < 0 ? entry.relativePath : anchor
+ }
+
+ if (additive) {
+  if (selection.has(entry.relativePath)) selection.delete(entry.relativePath)
+  else selection.add(entry.relativePath)
+  return anchor ?? entry.relativePath
+ }
+
+ selection.clear()
+ selection.add(entry.relativePath)
+ return entry.relativePath
+}
+
 // Convert a project-root-relative local path into the active mapping's path space.
 // Reject parent/sibling selections so a transfer can never silently target the
 // wrong remote location when the mapping is narrower than the project root.
@@ -38,6 +87,25 @@ export function toMappingPath(projectRelative: string, mappingLocalPath: string)
  if (path === mapping) return '.'
  if (path.startsWith(`${mapping}/`)) return path.slice(mapping.length + 1)
  throw new Error(`Путь «${projectRelative}» находится вне маппинга «${mappingLocalPath}». Выберите файл или папку внутри выбранной локальной папки.`)
+}
+
+// Convert a server-root-relative path through a mapping into a project path.
+// Paths outside the mapping stay browsable but cannot be used for transfers.
+export function fromDeploymentPath(serverRelative: string, mappingDeploymentPath: string, mappingLocalPath: string): string {
+ const clean = (value: string) => {
+  const normalized = value.replace(/\\/g, '/')
+  if (normalized.startsWith('/') || /^[a-zA-Z]:/.test(normalized)) throw new Error('Путь маппинга должен быть относительным.')
+  const parts = normalized.split('/').filter(part => part && part !== '.')
+  if (parts.some(part => part === '..')) throw new Error('Путь выходит за пределы корня.')
+  return parts.join('/')
+ }
+ const remote = clean(serverRelative), deployment = clean(mappingDeploymentPath), local = clean(mappingLocalPath)
+ let suffix = ''
+ if (!deployment) suffix = remote
+ else if (remote === deployment) suffix = ''
+ else if (remote.startsWith(`${deployment}/`)) suffix = remote.slice(deployment.length + 1)
+ else throw new Error(`Путь «${serverRelative}» вне маппинга «${mappingDeploymentPath}».`)
+ return [local, suffix].filter(Boolean).join('/') || '.'
 }
 
 // A successful refresh discards descendant caches, including paths removed on disk.

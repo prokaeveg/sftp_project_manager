@@ -95,7 +95,7 @@ func TestSchemaOneMigrationIsReadOnlyUntilSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if settings.SchemaVersion != 2 || len(settings.Projects) != 1 || settings.ActiveProjectID != "legacy-project" || settings.Projects[0].Connections[0].Mappings[0].ID != "legacy-mapping" {
+	if settings.SchemaVersion != SchemaVersion || len(settings.Projects) != 1 || settings.ActiveProjectID != "legacy-project" || settings.Projects[0].Connections[0].Mappings[0].ID != "legacy-mapping" {
 		t.Fatalf("migration: %+v", settings)
 	}
 	got, _ := os.ReadFile(filepath.Join(dir, "settings.json"))

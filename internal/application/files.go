@@ -61,6 +61,8 @@ func validateProfile(profile config.Profile) error {
 }
 
 func (s *Service) SaveProfile(profile config.Profile) (Status, error) {
+	var navigationToClose *transport.Session
+	defer func() { closeNavigationSession(navigationToClose) }()
 	profile.Name = strings.TrimSpace(profile.Name)
 	if err := validateProfile(profile); err != nil {
 		return Status{}, err
@@ -68,7 +70,7 @@ func (s *Service) SaveProfile(profile config.Profile) (Status, error) {
 	s.mu.Lock()
 	settings := cloneSettings(s.status.Settings)
 	settings.ProjectName = profile.Name
-	legacy := config.Project{ID: "legacy-project", Name: profile.Name, LocalRoot: profile.LocalRoot, DefaultConnectionID: "legacy-connection", Connections: []config.ProjectConnection{{ID: "legacy-connection", Name: "Default", Connection: profile.Connection, Excludes: append([]string(nil), profile.Excludes...), Mappings: []config.Mapping{{ID: "legacy-mapping", LocalPath: ".", RemotePath: profile.RemoteRoot}}}}}
+	legacy := config.Project{ID: "legacy-project", Name: profile.Name, LocalRoot: profile.LocalRoot, DefaultConnectionID: "legacy-connection", Connections: []config.ProjectConnection{{ID: "legacy-connection", Name: "Default", Connection: profile.Connection, RootPath: profile.RemoteRoot, Excludes: append([]string(nil), profile.Excludes...), Mappings: []config.Mapping{{ID: "legacy-mapping", LocalPath: ".", DeploymentPath: "."}}}}}
 	idx := -1
 	for i, p := range settings.Projects {
 		if p.ID == legacy.ID {
@@ -93,6 +95,7 @@ func (s *Service) SaveProfile(profile config.Profile) (Status, error) {
 		s.pending = nil
 	}
 	s.status.Settings = cloneSettings(settings)
+	navigationToClose = s.reconcileNavigationLocked()
 	s.mu.Unlock()
 	return s.Status(), nil
 }
@@ -122,16 +125,22 @@ func checkExcluded(profile config.Profile, relative string) error {
 func (s *Service) CancelOperation() {
 	s.mu.Lock()
 	cancel, session := s.cancelOperation, s.activeSession
+	navigationRequest := s.navigation != nil && s.navigation.inUse && s.navigation.session == session
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
 	}
-	if session != nil {
+	// The request watcher owns navigation cancellation. Closing its session
+	// directly after releasing mu could race with the next successful reuse.
+	if session != nil && !navigationRequest {
 		session.Close()
 	}
 }
 
 func (s *Service) Shutdown() {
+	s.shutdownAuth()
+	s.shutdownNavigation()
+	s.shutdownQueue()
 	s.CancelOperation()
 	// Wait until any in-flight connect or transfer has reaped its SSH process.
 	s.operationMu.Lock()
@@ -139,18 +148,28 @@ func (s *Service) Shutdown() {
 }
 
 func (s *Service) remoteOperation(parent context.Context, profile config.Profile, duration time.Duration, action func(context.Context, *transport.Session) error) error {
-	if !s.operationMu.TryLock() {
-		return errors.New("другая операция ещё выполняется")
-	}
-	defer s.operationMu.Unlock()
 	ctx, cancel := context.WithTimeout(parent, duration)
 	defer cancel()
+	for !s.operationMu.TryLock() {
+		if wait, _ := parent.Value(queueWaitKey{}).(bool); !wait {
+			return errors.New("другая операция ещё выполняется")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(30 * time.Millisecond):
+		}
+	}
+	defer s.operationMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	s.cancelOperation = cancel
 	executable := s.status.SSHPath
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); s.cancelOperation = nil; s.mu.Unlock() }()
-	session, err := transport.Open(ctx, executable, profile.Connection)
+	session, err := transport.Open(transport.WithAuthPrompt(ctx, s.requestAuth), executable, profile.Connection)
 	if err != nil {
 		return err
 	}
@@ -250,11 +269,31 @@ func sortEntries(entries []FileEntry) {
 }
 
 func (s *Service) ListRemote(ctx context.Context, relative string) ([]FileEntry, error) {
-	profile, err := s.profile()
-	if err != nil {
-		return nil, err
+	s.mu.Lock()
+	var projectRoot string
+	var connection config.ProjectConnection
+	for _, project := range s.status.Settings.Projects {
+		if project.ID != s.status.Settings.ActiveProjectID {
+			continue
+		}
+		projectRoot = project.LocalRoot
+		for _, candidate := range project.Connections {
+			if candidate.ID == s.status.Settings.ActiveConnectionID {
+				connection = candidate
+				connection.Excludes = slices.Clone(candidate.Excludes)
+				connection.Mappings = slices.Clone(candidate.Mappings)
+				break
+			}
+		}
+		break
 	}
-	mapper, err := mapping.New(profile.LocalRoot, profile.RemoteRoot)
+	if connection.ID == "" {
+		s.mu.Unlock()
+		return nil, errors.New("сначала выберите сервер проекта")
+	}
+	key := s.navigationKeyLocked()
+	s.mu.Unlock()
+	mapper, err := mapping.New(projectRoot, connection.RootPath)
 	if err != nil {
 		return nil, err
 	}
@@ -262,11 +301,11 @@ func (s *Service) ListRemote(ctx context.Context, relative string) ([]FileEntry,
 	if err != nil {
 		return nil, err
 	}
-	if err := checkExcluded(profile, relative); err != nil {
-		return nil, err
+	if remoteRootEntryExcluded(connection, relative) {
+		return nil, fmt.Errorf("путь %q исключён для этого подключения", relative)
 	}
 	result := []FileEntry{}
-	err = s.remoteOperation(ctx, profile, 30*time.Second, func(_ context.Context, session *transport.Session) error {
+	err = s.navigationOperation(ctx, key, func(session *transport.Session) error {
 		if err := transfer.CheckRemotePath(session.Client, remote); err != nil {
 			return err
 		}
@@ -279,7 +318,7 @@ func (s *Service) ListRemote(ctx context.Context, relative string) ([]FileEntry,
 				return errors.New("сервер вернул недопустимое имя файла")
 			}
 			entryRelative := path.Join(relative, entry.Name())
-			result = append(result, FileEntry{Name: entry.Name(), RelativePath: entryRelative, Size: entry.Size(), IsDir: entry.IsDir(), IsLink: entry.Mode()&os.ModeSymlink != 0, Excluded: excluded(profile, entryRelative)})
+			result = append(result, FileEntry{Name: entry.Name(), RelativePath: entryRelative, Size: entry.Size(), IsDir: entry.IsDir(), IsLink: entry.Mode()&os.ModeSymlink != 0, Excluded: remoteRootEntryExcluded(connection, entryRelative)})
 		}
 		return nil
 	})

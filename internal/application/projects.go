@@ -4,6 +4,7 @@ import (
 	"awesomeProject/internal/config"
 	"awesomeProject/internal/exclusion"
 	"awesomeProject/internal/mapping"
+	"awesomeProject/internal/transport"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
@@ -40,6 +41,11 @@ func localPathContains(parent, child string) bool {
 }
 
 func validateProject(project config.Project) error {
+	var err error
+	project, err = config.NormalizeProject(project)
+	if err != nil {
+		return err
+	}
 	project.Name = strings.TrimSpace(project.Name)
 	if project.Name == "" || len([]rune(project.Name)) > 120 {
 		return errors.New("укажите название проекта длиной от 1 до 120 символов")
@@ -81,7 +87,11 @@ func validateProject(project config.Project) error {
 			if !info.IsDir() {
 				return fmt.Errorf("подключение %q, локальный путь %q должен быть папкой", label, m.LocalPath)
 			}
-			if _, err := mapping.New(local, m.RemotePath); err != nil {
+			remotePath, err := config.ResolveDeploymentPath(c.RootPath, m.DeploymentPath)
+			if err != nil {
+				return err
+			}
+			if _, err := mapping.New(local, remotePath); err != nil {
 				return fmt.Errorf("подключение %q, сопоставление локальной папки %q: удалённый путь: %w", label, m.LocalPath, err)
 			}
 			for prev := 0; prev < mi; prev++ {
@@ -89,8 +99,12 @@ func validateProject(project config.Project) error {
 				if localPathContains(old.LocalPath, m.LocalPath) || localPathContains(m.LocalPath, old.LocalPath) {
 					return fmt.Errorf("подключение %q: локальные папки %q и %q пересекаются", label, old.LocalPath, m.LocalPath)
 				}
-				if pathContains(old.RemotePath, m.RemotePath) || pathContains(m.RemotePath, old.RemotePath) {
-					return fmt.Errorf("подключение %q: удалённые папки %q и %q пересекаются", label, old.RemotePath, m.RemotePath)
+				oldRemote, err := config.ResolveDeploymentPath(c.RootPath, old.DeploymentPath)
+				if err != nil {
+					return err
+				}
+				if pathContains(oldRemote, remotePath) || pathContains(remotePath, oldRemote) {
+					return fmt.Errorf("подключение %q: удалённые папки %q и %q пересекаются", label, oldRemote, remotePath)
 				}
 			}
 		}
@@ -99,8 +113,15 @@ func validateProject(project config.Project) error {
 }
 
 func (s *Service) SaveProject(project config.Project) (Status, error) {
+	var navigationToClose *transport.Session
+	defer func() { closeNavigationSession(navigationToClose) }()
 	project = cloneProject(project)
 	project.Name = strings.TrimSpace(project.Name)
+	var normalizeErr error
+	project, normalizeErr = config.NormalizeProject(project)
+	if normalizeErr != nil {
+		return Status{}, normalizeErr
+	}
 	if err := validateProject(project); err != nil {
 		return Status{}, err
 	}
@@ -130,7 +151,7 @@ func (s *Service) SaveProject(project config.Project) (Status, error) {
 				m.ID = id
 			}
 			m.LocalPath = filepath.ToSlash(filepath.Clean(m.LocalPath))
-			m.RemotePath = path.Clean(m.RemotePath)
+			m.DeploymentPath = path.Clean(m.DeploymentPath)
 		}
 	}
 	s.mu.Lock()
@@ -195,6 +216,7 @@ func (s *Service) SaveProject(project config.Project) (Status, error) {
 		}
 	}
 	s.status.Settings = cloneSettings(settings)
+	navigationToClose = s.reconcileNavigationLocked()
 	return s.statusCopyLocked(), nil
 }
 
@@ -253,7 +275,10 @@ func configFlatten(settings *config.Settings) {
 					if base == "." {
 						base = ""
 					}
-					settings.Profile = &config.Profile{Name: p.Name, LocalRoot: local, RemoteRoot: m.RemotePath, Connection: c.Connection, Excludes: append([]string(nil), c.Excludes...), ExcludeBase: base}
+					remote, err := config.ResolveDeploymentPath(c.RootPath, m.DeploymentPath)
+					if err == nil {
+						settings.Profile = &config.Profile{Name: p.Name, LocalRoot: local, RemoteRoot: remote, Connection: c.Connection, Excludes: append([]string(nil), c.Excludes...), ExcludeBase: base}
+					}
 					return
 				}
 			}
@@ -262,6 +287,8 @@ func configFlatten(settings *config.Settings) {
 }
 
 func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Status, error) {
+	var navigationToClose *transport.Session
+	defer func() { closeNavigationSession(navigationToClose) }()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	settings := cloneSettings(s.status.Settings)
@@ -327,6 +354,7 @@ func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Stat
 		return Status{}, err
 	}
 	s.status.Settings = cloneSettings(settings)
+	navigationToClose = s.reconcileNavigationLocked()
 	return s.statusCopyLocked(), nil
 }
 
