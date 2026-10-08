@@ -98,6 +98,13 @@ function installMock() {
  const initial = { schemaVersion: 3, projectName: '', projects: [], activeProjectID: '', activeConnectionID: '', activeMappingID: '' }
  let settings = JSON.parse(localStorage.getItem('sftp-ui-settings') || 'null') || initial
  const calls = []
+ let searchFoldersEnabled = false
+ const searchDirectoryExcluded = (p, relative) => {
+  if (p.searchExcludedDirectories?.some(d => relative.toLowerCase() === d.toLowerCase() || relative.toLowerCase().startsWith(d.toLowerCase() + '/'))) return true
+  if (!p.excludeDotDirectories) return false
+  let current = ''
+  return relative.split('/').some(part => { current = current ? current + '/' + part : part; return part.startsWith('.') && !p.searchIncludedDirectories?.includes(current) })
+ }
 	const authResponses = []
 	const forgetPasswordCalls = []
 	let armedAuthPrompt = null, activeAuthPrompt = null, pendingAuthResolve = null, pendingAuthReject = null
@@ -140,6 +147,7 @@ function installMock() {
 	 if (job) { job.status = 'running'; job.items[0].status = 'running' }
 	}
 	window.__uiMock = { calls, authResponses, forgetPasswordCalls, get settings() { return clone(settings) }, get queue() { return clone(queue) },
+  enableSearchFolders() { searchFoldersEnabled = true },
 	 armAuthPrompt(id, prompt, canRemember = true) { armedAuthPrompt = { id, prompt, canRemember }; activeAuthPrompt = null },
 	 replaceAuthPrompt(id, prompt, canRemember = true) { activeAuthPrompt = { id, prompt, canRemember } },
 	 get authPending() { return !!pendingAuthResolve },
@@ -169,7 +177,19 @@ function installMock() {
   },
   SearchProjectFiles: async (projectID, query) => {
    calls.push({ method: 'SearchProjectFiles', projectID, query })
-   return { files: [entry('error_windows.go', 'deep/error_windows.go'), entry('README.md', 'README.md')].filter(f => f.name.toLowerCase().includes(query.toLowerCase())), limited: false }
+   const p = settings.projects.find(p => p.id === projectID)
+   const files = [entry('error_windows.go', 'deep/error_windows.go'), entry('README.md', 'README.md')]
+   if (searchFoldersEnabled) files.push(entry('excluded-sample.ts', 'src/excluded-sample.ts'), entry('cached-sample.ts', '.cache/cached-sample.ts'))
+   return { files: files.filter(f => f.name.toLowerCase().includes(query.toLowerCase()) && !searchDirectoryExcluded(p, f.relativePath.split('/').slice(0, -1).join('/'))), limited: false }
+  },
+  SetDirectorySearchExcluded: async (projectID, relative, excluded) => {
+   calls.push({ method: 'SetDirectorySearchExcluded', projectID, relative, excluded })
+   const p = settings.projects.find(p => p.id === projectID)
+   p.searchExcludedDirectories = (p.searchExcludedDirectories || []).filter(d => d !== relative)
+   p.searchIncludedDirectories = (p.searchIncludedDirectories || []).filter(d => d !== relative)
+   if (excluded) p.searchExcludedDirectories.push(relative)
+   else if (relative.split('/').at(-1).startsWith('.')) p.searchIncludedDirectories.push(relative)
+   save(); return status()
   },
   GetStatus: async () => status(),
   SelectLocalDirectory: async () => 'C:\\Projects\\demo',
@@ -180,13 +200,16 @@ function installMock() {
    p.defaultConnectionID ||= p.connections[0]?.id || ''
    if (p.defaultConnectionID && !p.connections.some(c => c.id === p.defaultConnectionID)) throw new Error('Unknown default server')
    const index = settings.projects.findIndex(old => old.id === p.id)
-   if (index < 0) settings.projects.push(p); else settings.projects[index] = p
+   if (index < 0) { p.excludeDotDirectories = true; settings.projects.push(p) } else settings.projects[index] = p
    return select(p, index >= 0 ? settings.activeConnectionID : '', index >= 0 ? settings.activeMappingID : '')
   },
   SelectProject: async (projectID, connectionID, mappingID) => { calls.push({ method: 'SelectProject', projectID, connectionID, mappingID }); return select(settings.projects.find(p => p.id === projectID), connectionID, mappingID) },
   ListProjectLocal: async relative => {
    calls.push({ method: 'ListProjectLocal', relative })
-   return relative === '.' ? [entry('src', 'src', true), entry('README.md', 'README.md'), entry('.env', '.env', false, !!settings.profile), entry('LICENSE.md', 'LICENSE.md')] : [entry('App.vue', relative + '/App.vue'), entry('utils', relative + '/utils', true)]
+   const p = settings.projects.find(p => p.id === settings.activeProjectID)
+   const files = relative === '.' ? [entry('src', 'src', true), entry('README.md', 'README.md'), entry('.env', '.env', false, !!settings.profile), entry('LICENSE.md', 'LICENSE.md')] : [entry('App.vue', relative + '/App.vue'), entry('utils', relative + '/utils', true)]
+   if (searchFoldersEnabled && relative === '.') files.push(entry('.cache', '.cache', true))
+   return files.map(f => ({ ...f, searchExcluded: f.isDir && searchDirectoryExcluded(p, f.relativePath) }))
   },
 	  GetAuthPrompt: async () => clone(activeAuthPrompt),
 	  RespondAuthPrompt: async (id, answer, cancelled, remember) => {
@@ -656,9 +679,12 @@ try {
 	// File workspace: local double-click, default/explicit comparison and quick open.
 	await evaluate(`(() => { const row = [...document.querySelectorAll('[data-testid="local-pane"] .tree-row')].find(e => e.querySelector('.tree-name')?.textContent.includes('README.md')); row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })) })()`)
 	await until(() => evaluate(`document.querySelector('[data-testid="file-content"]')?.textContent.includes('local version')`), 'local file preview')
+	await until(() => evaluate(`!document.querySelector('[data-testid="refresh-file"]').disabled`), 'local preview request settled')
 	assert.equal(await evaluate(`document.querySelector('.file-tab').textContent`), 'README.md')
-	await evaluate(`(() => { const row = [...document.querySelectorAll('[data-testid="local-pane"] .tree-row')].find(e => e.querySelector('.tree-name')?.textContent.includes('README.md')); row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 180, clientY: 300 })) })()`)
+	await contextTreeName('local', 'README.md')
 	await until(() => visible('menu-compare-default'), 'default compare action')
+	await evaluate(`document.querySelector('.settings-fields').dispatchEvent(new Event('scroll'))`)
+	assert.equal(await visible('menu-compare-default'), true, 'delayed scroll from closed settings does not dismiss context menu')
 	assert.ok((await evaluate(`document.querySelector('[data-testid="menu-compare-default"]').textContent`)).includes('Production'))
 	await click('menu-compare-default')
 	await until(() => visible('compare-dialog'), 'default file comparison')
@@ -669,7 +695,7 @@ try {
 	await screenshot('15-file-comparison')
 	await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
 	await until(() => evaluate(`!document.querySelector('[data-testid="compare-dialog"][open]')`), 'close comparison')
-	await evaluate(`(() => { const row = [...document.querySelectorAll('[data-testid="local-pane"] .tree-row')].find(e => e.querySelector('.tree-name')?.textContent.includes('README.md')); row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 180, clientY: 300 })) })()`)
+	await contextTreeName('local', 'README.md')
 	await click('menu-compare-servers')
 	await evaluate(`document.querySelector('[data-compare-server-id="${developmentID}"]').click()`)
 	await until(() => visible('compare-dialog'), 'explicit comparison server')
@@ -692,7 +718,30 @@ try {
 	await click('refresh-file')
 	await until(() => evaluate(`!document.querySelector('[data-testid="refresh-file"]').disabled`), 'remote preview refreshed')
 	assert.equal(await evaluate(`window.__uiMock.calls.filter(c => c.method === 'ReadRemoteFile').at(-1).connectionID`), rootOnlyID, 'refresh reads the tab original server')
-	console.log('Browser checks passed: settings, authorization, trees, queue, transfers, file previews, per-server tabs, default/explicit comparison, Ctrl+Shift+N search. Screenshots:', output)
+	await evaluate(`window.__uiMock.enableSearchFolders(); document.querySelector('[data-testid="local-pane"] header button').click()`)
+	await until(() => evaluate(`!![...document.querySelectorAll('[data-testid="local-pane"] .tree-row')].find(e => e.textContent.includes('.cache') && e.textContent.includes('исключена из поиска'))`), 'dot directory search default mark')
+	await contextTreeName('local', 'src')
+	assert.equal(await evaluate(`document.querySelector('[data-testid="menu-search-exclude"]').textContent`), 'Mark directory excluded')
+	await click('menu-search-exclude')
+	await until(() => evaluate(`window.__uiMock.settings.projects.find(p => p.id === window.__uiMock.settings.activeProjectID).searchExcludedDirectories.includes('src')`), 'directory search exclusion saved')
+	await click('find-file'); await input('file-search-input', 'excluded-sample')
+	await until(() => evaluate(`document.querySelector('.search-message')?.textContent === 'Файлы не найдены'`), 'excluded subtree absent from search')
+	await evaluate(`document.querySelector('[data-testid="file-search-dialog"] .search-heading button').click()`)
+	await contextTreeName('local', 'src')
+	assert.equal(await evaluate(`document.querySelector('[data-testid="menu-search-exclude"]').textContent`), 'Unmark directory excluded')
+	await click('menu-search-exclude')
+	await until(() => evaluate(`!window.__uiMock.settings.projects.find(p => p.id === window.__uiMock.settings.activeProjectID).searchExcludedDirectories.includes('src')`), 'directory included again')
+	await click('find-file'); await input('file-search-input', 'excluded-sample')
+	await until(() => evaluate(`document.querySelector('.search-result')?.textContent.includes('src/excluded-sample.ts') && !document.querySelector('.search-result').disabled`), 'unmarked subtree found')
+	await input('file-search-input', 'cached-sample')
+	await until(() => evaluate(`document.querySelector('.search-message')?.textContent === 'Файлы не найдены'`), 'dot subtree absent by default')
+	await evaluate(`document.querySelector('[data-testid="file-search-dialog"] .search-heading button').click()`)
+	await contextTreeName('local', '.cache'); await click('menu-search-exclude')
+	await click('find-file'); await input('file-search-input', 'cached-sample')
+	await until(() => evaluate(`document.querySelector('.search-result')?.textContent.includes('.cache/cached-sample.ts') && !document.querySelector('.search-result').disabled`), 'dot directory override enables search')
+	await screenshot('17-search-exclusions')
+	await evaluate(`document.querySelector('[data-testid="file-search-dialog"] .search-heading button').click()`)
+	console.log('Browser checks passed: settings, authorization, trees, queue, transfers, previews, comparison, search and persistent directory search marks. Screenshots:', output)
 } catch (error) {
  if (socket?.readyState === WebSocket.OPEN) {
   try {

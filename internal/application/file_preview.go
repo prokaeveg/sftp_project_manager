@@ -110,6 +110,22 @@ func previewContent(reader io.Reader, info os.FileInfo) (FileContent, error) {
 		for i := range units {
 			units[i] = order.Uint16(data[i*2:])
 		}
+		for i := 0; i < len(units); i++ {
+			if units[i] >= 0xd800 && units[i] <= 0xdbff {
+				if i+1 == len(units) && result.Truncated {
+					units = units[:i]
+					break
+				}
+				if i+1 >= len(units) || units[i+1] < 0xdc00 || units[i+1] > 0xdfff {
+					result.Binary = true
+					return result, nil
+				}
+				i++
+			} else if units[i] >= 0xdc00 && units[i] <= 0xdfff {
+				result.Binary = true
+				return result, nil
+			}
+		}
 		result.Text = string(utf16.Decode(units))
 	} else {
 		data = bytes.TrimPrefix(data, []byte{0xef, 0xbb, 0xbf})

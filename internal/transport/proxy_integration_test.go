@@ -657,9 +657,20 @@ func proxyDescendants(root uint32) ([]uint32, error) {
 	for _, item := range entries {
 		parents[item.ProcessID] = item.ParentProcessID
 	}
+	return proxyDescendantIDs(parents, root), nil
+}
+
+func proxyDescendantIDs(parents map[uint32]uint32, root uint32) []uint32 {
 	var descendants []uint32
 	for id := range parents {
+		seen := map[uint32]bool{}
 		for parent := parents[id]; parent != 0; parent = parents[parent] {
+			// Parent PIDs can be reused after the original process exits. A
+			// process snapshot can therefore contain an apparent ancestry cycle.
+			if seen[parent] {
+				break
+			}
+			seen[parent] = true
 			if parent == root {
 				descendants = append(descendants, id)
 				break
@@ -669,7 +680,18 @@ func proxyDescendants(root uint32) ([]uint32, error) {
 			}
 		}
 	}
-	return descendants, nil
+	return descendants
+}
+
+func TestProxyDescendantIDsIgnoresAncestryCycles(t *testing.T) {
+	ids := proxyDescendantIDs(map[uint32]uint32{1: 2, 2: 1, 3: 9, 4: 3, 5: 5}, 9)
+	found := map[uint32]bool{}
+	for _, id := range ids {
+		found[id] = true
+	}
+	if len(ids) != 2 || !found[3] || !found[4] {
+		t.Fatalf("descendants = %v", ids)
+	}
 }
 
 func waitProxyProcessesExited(t *testing.T, pids []uint32, timeout time.Duration) {

@@ -27,11 +27,14 @@ type Settings struct {
 }
 
 type Project struct {
-	ID                  string              `json:"id"`
-	Name                string              `json:"name"`
-	LocalRoot           string              `json:"localRoot"`
-	Connections         []ProjectConnection `json:"connections"`
-	DefaultConnectionID string              `json:"defaultConnectionID,omitempty"`
+	ID                        string              `json:"id"`
+	Name                      string              `json:"name"`
+	LocalRoot                 string              `json:"localRoot"`
+	Connections               []ProjectConnection `json:"connections"`
+	DefaultConnectionID       string              `json:"defaultConnectionID,omitempty"`
+	ExcludeDotDirectories     bool                `json:"excludeDotDirectories,omitempty"`
+	SearchExcludedDirectories []string            `json:"searchExcludedDirectories,omitempty"`
+	SearchIncludedDirectories []string            `json:"searchIncludedDirectories,omitempty"`
 }
 type ProjectConnection struct {
 	ID         string               `json:"id"`
@@ -63,6 +66,18 @@ func Default() Settings { return Settings{SchemaVersion: SchemaVersion, Projects
 // connection root plus paths relative to that root. It returns a copy and
 // clears deprecated RemotePath values so subsequent saves are canonical.
 func NormalizeProject(project Project) (Project, error) {
+	project.SearchExcludedDirectories = append([]string(nil), project.SearchExcludedDirectories...)
+	project.SearchIncludedDirectories = append([]string(nil), project.SearchIncludedDirectories...)
+	for _, directories := range [][]string{project.SearchExcludedDirectories, project.SearchIncludedDirectories} {
+		if len(directories) > 1000 {
+			return Project{}, errors.New("too many search directory exclusions")
+		}
+		for _, directory := range directories {
+			if directory == "." || !validDeploymentPath(directory) {
+				return Project{}, fmt.Errorf("invalid search directory path %q", directory)
+			}
+		}
+	}
 	project.Connections = append([]ProjectConnection(nil), project.Connections...)
 	for ci := range project.Connections {
 		connection := &project.Connections[ci]

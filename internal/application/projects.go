@@ -186,6 +186,7 @@ func (s *Service) SaveProject(project config.Project) (Status, error) {
 		preferredConnection, preferredMapping = settings.ActiveConnectionID, settings.ActiveMappingID
 	}
 	if idx < 0 {
+		project.ExcludeDotDirectories = true
 		settings.Projects = append(settings.Projects, project)
 	} else {
 		settings.Projects[idx] = project
@@ -253,6 +254,8 @@ func projectSelection(project config.Project, preferredConnection, preferredMapp
 
 func cloneProject(p config.Project) config.Project {
 	out := p
+	out.SearchExcludedDirectories = slices.Clone(p.SearchExcludedDirectories)
+	out.SearchIncludedDirectories = slices.Clone(p.SearchIncludedDirectories)
 	out.Connections = make([]config.ProjectConnection, len(p.Connections))
 	for i, c := range p.Connections {
 		out.Connections[i] = c

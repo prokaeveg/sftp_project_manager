@@ -21,12 +21,13 @@ import (
 )
 
 type FileEntry struct {
-	Name         string `json:"name"`
-	RelativePath string `json:"relativePath"`
-	Size         int64  `json:"size"`
-	IsDir        bool   `json:"isDir"`
-	IsLink       bool   `json:"isLink"`
-	Excluded     bool   `json:"excluded"`
+	Name           string `json:"name"`
+	RelativePath   string `json:"relativePath"`
+	Size           int64  `json:"size"`
+	IsDir          bool   `json:"isDir"`
+	IsLink         bool   `json:"isLink"`
+	Excluded       bool   `json:"excluded"`
+	SearchExcluded bool   `json:"searchExcluded"`
 }
 
 type Preview struct {
@@ -206,11 +207,13 @@ func (s *Service) ListLocal(relative string) ([]FileEntry, error) {
 func (s *Service) ListProjectLocal(relative string) ([]FileEntry, error) {
 	s.mu.Lock()
 	var profile config.Profile
+	var selectedProject config.Project
 	for _, project := range s.status.Settings.Projects {
 		if project.ID != s.status.Settings.ActiveProjectID {
 			continue
 		}
 		profile = config.Profile{Name: project.Name, LocalRoot: project.LocalRoot, RemoteRoot: "/"}
+		selectedProject = cloneProject(project)
 		for _, connection := range project.Connections {
 			if connection.ID == s.status.Settings.ActiveConnectionID {
 				profile.Excludes = slices.Clone(connection.Excludes)
@@ -223,7 +226,13 @@ func (s *Service) ListProjectLocal(relative string) ([]FileEntry, error) {
 	if profile.LocalRoot == "" {
 		return nil, errors.New("сначала выберите проект")
 	}
-	return listLocal(profile, relative)
+	entries, err := listLocal(profile, relative)
+	for i := range entries {
+		if entries[i].IsDir {
+			entries[i].SearchExcluded = directorySearchExcluded(selectedProject, entries[i].RelativePath)
+		}
+	}
+	return entries, err
 }
 
 func listLocal(profile config.Profile, relative string) ([]FileEntry, error) {

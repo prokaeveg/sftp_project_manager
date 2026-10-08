@@ -19,8 +19,9 @@ func TestFilePreviewLocalSearchAndLimits(t *testing.T) {
 	for name, content := range map[string][]byte{
 		"nested/error_windows.go": []byte("package main\n// Привет\n"),
 		".env":                    []byte("SECRET"), "binary.bin": {0, 1, 2},
-		"large.txt": []byte(strings.Repeat("a", maxPreviewBytes+1)),
-		"utf16.txt": {0xff, 0xfe, 'h', 0, 'i', 0},
+		"large.txt":         []byte(strings.Repeat("a", maxPreviewBytes+1)),
+		"utf16.txt":         {0xff, 0xfe, 'h', 0, 'i', 0},
+		"invalid-utf16.txt": {0xff, 0xfe, 0, 0xd8, 'a', 0},
 	} {
 		if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), content, 0600); err != nil {
 			t.Fatal(err)
@@ -51,6 +52,10 @@ func TestFilePreviewLocalSearchAndLimits(t *testing.T) {
 	utf16, err := s.ReadLocalFile(id, "utf16.txt")
 	if err != nil || utf16.Text != "hi" {
 		t.Fatalf("utf16=%+v err=%v", utf16, err)
+	}
+	invalid, err := s.ReadLocalFile(id, "invalid-utf16.txt")
+	if err != nil || !invalid.Binary {
+		t.Fatalf("invalid utf16=%+v err=%v", invalid, err)
 	}
 	result, err := s.SearchProjectFiles(context.Background(), id, "erwin")
 	if err != nil || len(result.Files) != 1 || result.Files[0].RelativePath != "nested/error_windows.go" {

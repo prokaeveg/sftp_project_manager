@@ -91,13 +91,7 @@ func cloneSettings(in config.Settings) config.Settings {
 	out := in
 	out.Projects = make([]config.Project, len(in.Projects))
 	for i, p := range in.Projects {
-		out.Projects[i] = p
-		out.Projects[i].Connections = make([]config.ProjectConnection, len(p.Connections))
-		for j, c := range p.Connections {
-			out.Projects[i].Connections[j] = c
-			out.Projects[i].Connections[j].Mappings = append([]config.Mapping(nil), c.Mappings...)
-			out.Projects[i].Connections[j].Excludes = append([]string(nil), c.Excludes...)
-		}
+		out.Projects[i] = cloneProject(p)
 	}
 	if in.Profile != nil {
 		p := *in.Profile

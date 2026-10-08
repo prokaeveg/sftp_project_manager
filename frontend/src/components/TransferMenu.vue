@@ -1,13 +1,18 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import type { ProjectConnection } from '../bridge'
-const props = defineProps<{ x: number; y: number; connections: ProjectConnection[]; currentId?: string; canCompare?: boolean }>()
-const emit = defineEmits<{ close: []; transfer: [direction: 'upload' | 'download', connectionID: string]; compare: [connectionID: string] }>()
+const props = defineProps<{ x: number; y: number; connections: ProjectConnection[]; currentId?: string; canCompare?: boolean; canExcludeDirectory?: boolean; searchExcluded?: boolean }>()
+const emit = defineEmits<{ close: []; transfer: [direction: 'upload' | 'download', connectionID: string]; compare: [connectionID: string]; excludeDirectory: [excluded: boolean] }>()
 const menu = ref<HTMLElement>(), submenu = ref<'upload' | 'download' | 'compare'>()
 const left = ref(0), top = ref(0)
 const current = computed(() => props.connections.find(c => c.id === props.currentId))
 function choose(direction: 'upload' | 'download', id?: string) { if (id) emit('transfer', direction, id) }
-function outside(event: Event) { if (!menu.value?.contains(event.target as Node)) emit('close') }
+function outside(event: Event) {
+ // A closed settings dialog can deliver a queued scroll event after its
+ // layout changes. It must not dismiss a newly opened tree context menu.
+ if (event.type === 'scroll' && (event.target as Element)?.closest?.('dialog:not([open])')) return
+ if (!menu.value?.contains(event.target as Node)) emit('close')
+}
 function key(event: KeyboardEvent) {
  if (event.key === 'Escape') { event.preventDefault(); emit('close'); return }
  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
@@ -19,7 +24,7 @@ function key(event: KeyboardEvent) {
 onMounted(async () => {
  left.value = Math.max(8, Math.min(props.x, window.innerWidth - 290))
  top.value = Math.max(8, Math.min(props.y, window.innerHeight - 280))
- await nextTick(); menu.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+ await nextTick(); menu.value?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus({ preventScroll: true })
  document.addEventListener('pointerdown', outside)
  window.addEventListener('resize', close); document.addEventListener('scroll', outside, true)
 })
@@ -29,6 +34,10 @@ onUnmounted(() => { document.removeEventListener('pointerdown', outside); window
 <template>
  <Teleport to="body">
   <div ref="menu" data-testid="transfer-menu" class="transfer-menu" role="menu" aria-label="Передача выделенных файлов" :style="{ left: `${left}px`, top: `${top}px`, maxHeight: `calc(100vh - ${top + 8}px)` }" @keydown="key" @contextmenu.prevent>
+   <template v-if="canExcludeDirectory">
+    <button role="menuitem" data-testid="menu-search-exclude" @click="emit('excludeDirectory', !searchExcluded)">{{ searchExcluded ? 'Unmark directory excluded' : 'Mark directory excluded' }}</button>
+    <div class="menu-divider"></div>
+   </template>
    <button role="menuitem" data-testid="menu-upload" :disabled="!current" @click="choose('upload', current?.id)">Загрузить на {{ current?.name ?? 'сервер' }}</button>
    <button role="menuitem" data-testid="menu-download" :disabled="!current" @click="choose('download', current?.id)">Скачать с {{ current?.name ?? 'сервера' }}</button>
    <template v-if="canCompare">

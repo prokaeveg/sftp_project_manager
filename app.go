@@ -108,6 +108,9 @@ func (a *App) CompareFile(projectID, connectionID, relative string) (application
 func (a *App) SearchProjectFiles(projectID, query string) (application.FileSearchResult, error) {
 	return a.service.SearchProjectFiles(a.ctx, projectID, query)
 }
+func (a *App) SetDirectorySearchExcluded(projectID, relative string, excluded bool) (application.Status, error) {
+	return a.service.SetDirectorySearchExcluded(projectID, relative, excluded)
+}
 
 func (a *App) GetAuthPrompt() *application.AuthPrompt { return a.service.GetAuthPrompt() }
 func (a *App) RespondAuthPrompt(id, answer string, cancelled, remember bool) error {

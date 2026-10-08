@@ -55,7 +55,11 @@ async function compareFile(relative: string, connectionID: string) {
  if (version !== generation) return
  comparison.value = result; await nextTick(); compareDialog.value?.showModal()
 }
-function closeComparison() { compareDialog.value?.close(); comparison.value = undefined; compareTrigger?.focus() }
+function closeComparison() {
+ compareDialog.value?.close(); comparison.value = undefined
+ if (compareTrigger?.isConnected) compareTrigger.focus()
+ else document.querySelector<HTMLButtonElement>('.file-tab[aria-selected="true"]')?.focus()
+}
 async function openSearch() {
  if (!props.project.id || document.querySelector('dialog[open]')) return
  searchTrigger = document.activeElement as HTMLElement
@@ -69,6 +73,7 @@ function closeSearch() {
 async function runSearch() {
  const version = ++searchRevision, projectID = props.project.id, value = query.value
  searching.value = true; searchError.value = ''
+ search.value = { files: [], limited: false }
  try {
   const result = await backend().SearchProjectFiles(projectID, value)
   if (version !== searchRevision || !searchDialog.value?.open) return
@@ -102,12 +107,13 @@ defineExpose({ openFile, refreshFile, compareFile, openSearch })
 
 <template>
  <section class="pane editor-pane" data-testid="file-workspace">
-  <div class="editor-tabs" role="tablist" aria-label="Открытые файлы">
+  <div class="editor-tabs">
+   <div class="tabs-list" role="tablist" aria-label="Открытые файлы">
    <div v-for="(tab, index) in tabs" :key="tab.key" class="tab-wrapper" :class="{ active: activeKey === tab.key }">
     <button class="file-tab" role="tab" :aria-selected="activeKey === tab.key" :tabindex="activeKey === tab.key ? 0 : -1" :title="tab.file.path" @click="activeKey = tab.key" @keydown="tabKey($event, index)">{{ title(tab.file) }}</button>
     <button class="tab-close" :aria-label="`Закрыть ${title(tab.file)}`" @click="closeTab(tab.key)">×</button>
    </div>
-   <span class="toolbar-spacer"></span><button class="icon-button" data-testid="find-file" title="Найти файл (Ctrl+Shift+N)" aria-label="Найти файл" @click="openSearch">⌕</button>
+   </div><button class="icon-button" data-testid="find-file" title="Найти файл (Ctrl+Shift+N)" aria-label="Найти файл" @click="openSearch">⌕</button>
   </div>
   <template v-if="active">
    <header class="editor-file-info"><span :title="active.path">{{ active.server ? `${active.server} · ` : '' }}{{ active.path }}</span><button class="icon-button" data-testid="refresh-file" :disabled="busy || (!!active.connectionID && remoteBusy)" title="Прочитать файл заново" aria-label="Обновить файл" @click="emit('refresh', active.connectionID ? 'remote' : 'local', active.relativePath, active.connectionID)">⟳</button></header>

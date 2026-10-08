@@ -502,6 +502,15 @@ func TestBatchSystemSSHPreviewCopiesFrozenProfileAndSingleSessionExecution(t *te
 				t.Fatalf("%s navigation: %v", alias, err)
 			}
 		}
+		settings := service.Status().Settings
+		remoteFile, err := service.ReadRemoteFile(ctx, settings.ActiveProjectID, settings.ActiveConnectionID, "folder/first.txt")
+		if err != nil || remoteFile.Text != string(wantContents) {
+			t.Fatalf("%s file preview: %+v, %v", alias, remoteFile, err)
+		}
+		comparison, err := service.CompareFile(ctx, settings.ActiveProjectID, settings.ActiveConnectionID, "folder/first.txt")
+		if err != nil || !comparison.Equal || !comparison.Comparable {
+			t.Fatalf("%s file comparison: %+v, %v", alias, comparison, err)
+		}
 		if sessions.Load() != before+2 {
 			t.Fatalf("%s opened %d SSH connections for 3 reads, want jump+target only", alias, sessions.Load()-before)
 		}
@@ -519,6 +528,32 @@ func TestBatchSystemSSHPreviewCopiesFrozenProfileAndSingleSessionExecution(t *te
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+	// Comparing with an explicitly chosen server must not select it in the tree.
+	if _, err := service.SaveProfile(profile); err != nil {
+		t.Fatal(err)
+	}
+	comparisonProject := service.Status().Settings.Projects[0]
+	otherPreviewConnection := comparisonProject.Connections[0]
+	otherPreviewConnection.ID, otherPreviewConnection.Name = "preview-other", "Other preview server"
+	otherPreviewConnection.Connection.Host = "example.invalid"
+	otherPreviewConnection.Mappings = []config.Mapping{{ID: "preview-other-mapping", LocalPath: ".", DeploymentPath: "."}}
+	comparisonProject.Connections = append(comparisonProject.Connections, otherPreviewConnection)
+	if _, err := service.SaveProject(comparisonProject); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.SelectProject(comparisonProject.ID, otherPreviewConnection.ID, "preview-other-mapping"); err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := service.CompareFile(ctx, comparisonProject.ID, comparisonProject.Connections[0].ID, "folder/first.txt")
+	if err != nil || !comparison.Equal || !comparison.Comparable {
+		t.Fatalf("explicit server comparison: %+v, %v", comparison, err)
+	}
+	if service.Status().Settings.ActiveConnectionID != otherPreviewConnection.ID {
+		t.Fatal("comparison changed active server")
+	}
+	if _, err := service.CompareFile(ctx, comparisonProject.ID, comparisonProject.Connections[0].ID, ".env"); err == nil {
+		t.Fatal("comparison accepted excluded local file")
 	}
 	service.Shutdown()
 	if service.GetNavigationStatus().State != "disconnected" {

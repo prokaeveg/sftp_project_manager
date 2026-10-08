@@ -90,7 +90,7 @@ func (s *Service) SearchProjectFiles(parent context.Context, projectID, query st
 		if relative == "." {
 			return nil
 		}
-		if entry.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 || exclusion.Match(excludes, relative) || (entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "node_modules")) {
+		if entry.Type()&(os.ModeSymlink|os.ModeIrregular) != 0 || exclusion.Match(excludes, relative) || (entry.IsDir() && directorySearchExcluded(project, relative)) {
 			if entry.IsDir() {
 				return fs.SkipDir
 			}

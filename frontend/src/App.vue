@@ -5,6 +5,7 @@ import FileTree from './components/FileTree.vue'
 import TransferQueue from './components/TransferQueue.vue'
 import TransferMenu from './components/TransferMenu.vue'
 import FileWorkspace from './components/FileWorkspace.vue'
+import { directorySearchExcluded } from './search-exclusions'
 import { fromDeploymentPath, loadDirectory, selectTreeEntry, toggleDirectory, toMappingPath, treeRoot, type TreeNode } from './file-tree'
 
 function emptyProject(): Project { return { id: '', name: '', localRoot: '', connections: [] } }
@@ -60,7 +61,12 @@ const previewEnvironmentCount = computed(() => preview.value?.items.filter(item 
 const excludesText = computed({ get: () => (draftConnection.value?.excludes ?? []).join('\n'), set: (value: string) => { if (draftConnection.value) draftConnection.value.excludes = value.replace(/\r\n/g, '\n').split('\n') } })
 
 function copy<T>(value: T): T { return JSON.parse(JSON.stringify(value)) }
-function replaceProject(target: Project, value: Project) { Object.assign(target, copy(value)); target.defaultConnectionID = value.defaultConnectionID }
+function replaceProject(target: Project, value: Project) {
+ Object.assign(target, copy(value)); target.defaultConnectionID = value.defaultConnectionID
+ target.excludeDotDirectories = value.excludeDotDirectories
+ target.searchExcludedDirectories = value.searchExcludedDirectories ? [...value.searchExcludedDirectories] : undefined
+ target.searchIncludedDirectories = value.searchIncludedDirectories ? [...value.searchIncludedDirectories] : undefined
+}
 function resetTrees() { transferMenu.value = undefined; selectionAnchors.local = undefined; selectionAnchors.remote = undefined; trees.local = treeRoot(); trees.remote = treeRoot(); selections.local.clear(); selections.remote.clear(); preview.value = undefined }
 function setNavigationDisconnected(projectID = status.value?.settings.activeProjectID ?? '', connectionID = status.value?.settings.activeConnectionID ?? '') {
  navigation.value = { state: 'disconnected', projectID, connectionID }
@@ -299,13 +305,30 @@ function selectFile(side: 'local' | 'remote', file: FileEntry, event: MouseEvent
  preview.value = undefined
 }
 function openTransferMenu(side: 'local' | 'remote', event: MouseEvent, file?: FileEntry) {
- if (busy.value || queueRunning.value || file?.excluded || file?.isLink) return
+ const searchDirectory = side === 'local' && file?.isDir && file.relativePath !== '.' && !file.isLink
+ if (busy.value || queueRunning.value || (file?.excluded && !searchDirectory) || file?.isLink) return
  if (file && !selections[side].has(file.relativePath)) {
   selections[side].clear(); selections[side].add(file.relativePath); selectionAnchors[side] = file.relativePath
  }
  if (!selections[side].size) return
  preview.value = undefined
  transferMenu.value = { side, x: event.clientX, y: event.clientY, file }
+}
+async function setDirectorySearchExcluded(excluded: boolean) {
+ const file = transferMenu.value?.file; transferMenu.value = undefined
+ if (!file?.isDir || busy.value) return
+ await run(async () => {
+  status.value = await backend().SetDirectorySearchExcluded(project.id, file.relativePath, excluded)
+  if (savedProject.value) replaceProject(project, savedProject.value)
+  refreshDraftFromProject()
+  function updateMarks(node: TreeNode) {
+   if (node.entry.isDir) {
+    node.entry.searchExcluded = directorySearchExcluded(project, node.entry.relativePath)
+   }
+   node.children.forEach(updateMarks)
+  }
+  updateMarks(trees.local)
+ })
 }
 async function openFile(side: 'local' | 'remote', relative: string) {
  if (side === 'remote' && queueRunning.value) return
@@ -523,7 +546,7 @@ onUnmounted(() => { queuePollingEnabled = false; authPollingEnabled = false; aut
     </div>
    </section>
   </section>
-  <TransferMenu v-if="transferMenu" :x="transferMenu.x" :y="transferMenu.y" :connections="savedProject?.connections ?? []" :current-id="quickConnection?.id" :can-compare="!!transferMenu.file && !transferMenu.file.isDir && selections[transferMenu.side].size === 1" @compare="compareSelected" @close="transferMenu = undefined" @transfer="(direction, id) => transferSelection(transferMenu!.side, direction, id)" />
+  <TransferMenu v-if="transferMenu" :x="transferMenu.x" :y="transferMenu.y" :connections="savedProject?.connections ?? []" :current-id="quickConnection?.id" :can-exclude-directory="transferMenu.side === 'local' && !!transferMenu.file?.isDir && transferMenu.file.relativePath !== '.'" :search-excluded="transferMenu.file?.searchExcluded" @exclude-directory="setDirectorySearchExcluded" :can-compare="!!transferMenu.file && !transferMenu.file.isDir && selections[transferMenu.side].size === 1" @compare="compareSelected" @close="transferMenu = undefined" @transfer="(direction, id) => transferSelection(transferMenu!.side, direction, id)" />
   <TransferQueue v-if="queuePanelOpen" data-testid="queue-panel" :queue="queue" :error="queueError" :busy="queueBusy" :app-busy="busy" @pause="pauseQueue" @cancel="cancelQueueJob" @clear="clearFinishedQueue" @retry="retryQueueJob" />
 
   <dialog ref="settingsDialog" data-testid="settings-dialog" class="modal settings-modal" :class="{ 'wizard-modal': wizard }" @close="onSettingsClose" @cancel="cancelSettings">

@@ -62,6 +62,7 @@ function onContextMenu(event: MouseEvent) {
    <span v-else class="tree-disclosure-spacer"></span>
    <span class="tree-name"><span class="entry-icon">{{ node.entry.isLink ? '↗' : node.entry.isDir ? '▰' : '▫' }}</span>{{ node.entry.name }}{{ node.entry.isDir ? '/' : '' }}</span>
    <span v-if="node.entry.excluded" class="excluded-label">исключён</span>
+   <span v-else-if="node.entry.searchExcluded" class="excluded-label">исключена из поиска</span>
    <span v-else-if="!node.entry.isDir && !node.entry.isLink" class="file-size">{{ node.entry.size }} Б</span>
    <button
     v-if="node.entry.isDir && !node.entry.isLink && node.loaded"

@@ -40,6 +40,9 @@ export interface Project {
     localRoot: string;
     connections: ProjectConnection[];
     defaultConnectionID?: string
+    excludeDotDirectories?: boolean;
+    searchExcludedDirectories?: string[];
+    searchIncludedDirectories?: string[];
 }
 
 export interface SSHDiscovery {
@@ -66,6 +69,7 @@ export interface FileEntry {
     isDir: boolean;
     isLink: boolean;
     excluded: boolean
+    searchExcluded?: boolean
 }
 
 export interface Preview {
@@ -174,6 +178,7 @@ interface API {
     ReadRemoteFile(projectID: string, connectionID: string, relative: string): Promise<FileContent>;
     CompareFile(projectID: string, connectionID: string, relative: string): Promise<FileComparison>;
     SearchProjectFiles(projectID: string, query: string): Promise<FileSearchResult>;
+    SetDirectorySearchExcluded(projectID: string, relative: string, excluded: boolean): Promise<Status>;
     GetStatus(): Promise<Status>;
 
     SaveProjectName(name: string): Promise<Status>;
