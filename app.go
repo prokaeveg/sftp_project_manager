@@ -96,6 +96,19 @@ func (a *App) ExecuteBatch(token string, existingPolicy string, includeEnvironme
 }
 func (a *App) CancelOperation() { a.service.CancelOperation() }
 
+func (a *App) ReadLocalFile(projectID, relative string) (application.FileContent, error) {
+	return a.service.ReadLocalFile(projectID, relative)
+}
+func (a *App) ReadRemoteFile(projectID, connectionID, relative string) (application.FileContent, error) {
+	return a.service.ReadRemoteFile(a.ctx, projectID, connectionID, relative)
+}
+func (a *App) CompareFile(projectID, connectionID, relative string) (application.FileComparison, error) {
+	return a.service.CompareFile(a.ctx, projectID, connectionID, relative)
+}
+func (a *App) SearchProjectFiles(projectID, query string) (application.FileSearchResult, error) {
+	return a.service.SearchProjectFiles(a.ctx, projectID, query)
+}
+
 func (a *App) GetAuthPrompt() *application.AuthPrompt { return a.service.GetAuthPrompt() }
 func (a *App) RespondAuthPrompt(id, answer string, cancelled, remember bool) error {
 	return a.service.RespondAuthPrompt(id, answer, cancelled, remember)

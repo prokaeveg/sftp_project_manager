@@ -154,6 +154,23 @@ function installMock() {
 	 }
 	}
  window.go = { main: { App: {
+  ReadLocalFile: async (projectID, relative) => {
+   calls.push({ method: 'ReadLocalFile', projectID, relative })
+   return { projectID, connectionID: '', server: '', name: relative.split('/').at(-1), relativePath: relative, path: 'C:/Projects/demo/' + relative, text: 'first\nlocal version\nlast\n', size: 32, binary: false, truncated: false, encoding: 'UTF-8' }
+  },
+  ReadRemoteFile: async (projectID, connectionID, relative) => {
+   calls.push({ method: 'ReadRemoteFile', projectID, connectionID, relative })
+   const c = settings.projects.find(p => p.id === projectID).connections.find(c => c.id === connectionID)
+   return { projectID, connectionID, server: c.name, name: relative.split('/').at(-1), relativePath: relative, path: c.rootPath + '/' + relative, text: 'first\nserver version\nlast\n', size: 33, binary: false, truncated: false, encoding: 'UTF-8' }
+  },
+  CompareFile: async (projectID, connectionID, relative) => {
+   calls.push({ method: 'CompareFile', projectID, connectionID, relative })
+   return { local: await window.go.main.App.ReadLocalFile(projectID, relative), remote: await window.go.main.App.ReadRemoteFile(projectID, connectionID, relative), equal: false, comparable: true }
+  },
+  SearchProjectFiles: async (projectID, query) => {
+   calls.push({ method: 'SearchProjectFiles', projectID, query })
+   return { files: [entry('error_windows.go', 'deep/error_windows.go'), entry('README.md', 'README.md')].filter(f => f.name.toLowerCase().includes(query.toLowerCase())), limited: false }
+  },
   GetStatus: async () => status(),
   SelectLocalDirectory: async () => 'C:\\Projects\\demo',
   SaveProject: async draft => {
@@ -636,7 +653,46 @@ try {
 	await input('mapping-local-path', '.')
 	await click('settings-save')
 	await until(() => evaluate(`window.__uiMock.settings.projects[0].connections.find(c => c.id === ${JSON.stringify(rootOnlyID)}).mappings.length === 1`), 'manual mapping added')
-	console.log('Browser checks passed: settings, remember/forget password and prompt cancellation, root-only server browsing and manual mapping, selection/context menus, queue, persistent navigation, transfers and unmapped browsing. Screenshots:', output)
+	// File workspace: local double-click, default/explicit comparison and quick open.
+	await evaluate(`(() => { const row = [...document.querySelectorAll('[data-testid="local-pane"] .tree-row')].find(e => e.querySelector('.tree-name')?.textContent.includes('README.md')); row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })) })()`)
+	await until(() => evaluate(`document.querySelector('[data-testid="file-content"]')?.textContent.includes('local version')`), 'local file preview')
+	assert.equal(await evaluate(`document.querySelector('.file-tab').textContent`), 'README.md')
+	await evaluate(`(() => { const row = [...document.querySelectorAll('[data-testid="local-pane"] .tree-row')].find(e => e.querySelector('.tree-name')?.textContent.includes('README.md')); row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 180, clientY: 300 })) })()`)
+	await until(() => visible('menu-compare-default'), 'default compare action')
+	assert.ok((await evaluate(`document.querySelector('[data-testid="menu-compare-default"]').textContent`)).includes('Production'))
+	await click('menu-compare-default')
+	await until(() => visible('compare-dialog'), 'default file comparison')
+	assert.equal(await evaluate(`window.__uiMock.calls.filter(c => c.method === 'CompareFile').at(-1).connectionID`), productionID)
+	assert.equal(await evaluate(`window.__uiMock.settings.activeConnectionID`), rootOnlyID, 'comparison keeps navigation server')
+	assert.equal(await evaluate(`document.querySelectorAll('[data-testid="file-diff"] .diff-removed').length`), 1)
+	assert.equal(await evaluate(`document.querySelectorAll('[data-testid="file-diff"] .diff-added').length`), 1)
+	await screenshot('15-file-comparison')
+	await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
+	await until(() => evaluate(`!document.querySelector('[data-testid="compare-dialog"][open]')`), 'close comparison')
+	await evaluate(`(() => { const row = [...document.querySelectorAll('[data-testid="local-pane"] .tree-row')].find(e => e.querySelector('.tree-name')?.textContent.includes('README.md')); row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 180, clientY: 300 })) })()`)
+	await click('menu-compare-servers')
+	await evaluate(`document.querySelector('[data-compare-server-id="${developmentID}"]').click()`)
+	await until(() => visible('compare-dialog'), 'explicit comparison server')
+	assert.equal(await evaluate(`window.__uiMock.calls.filter(c => c.method === 'CompareFile').at(-1).connectionID`), developmentID)
+	await evaluate(`document.querySelector('[data-testid="compare-dialog"] .compare-heading button').click()`)
+	await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'N', code: 'KeyN', modifiers: 10, windowsVirtualKeyCode: 78 })
+	await until(() => visible('file-search-dialog'), 'Ctrl+Shift+N opens file search')
+	await input('file-search-input', 'error_windows')
+	await until(() => evaluate(`document.querySelector('.search-result')?.textContent.includes('deep/error_windows.go') && !document.querySelector('.search-result').disabled`), 'search finds unexpanded local file')
+	await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13 })
+	await until(() => evaluate(`document.querySelector('.tab-wrapper.active .file-tab')?.textContent === 'error_windows.go'`), 'Enter opens search result')
+	await click('connect-server')
+	await until(() => evaluate(`!document.querySelector('[data-testid="connect-server"]').disabled`), 'remote tree ready for preview')
+	await evaluate(`(() => { const row = [...document.querySelectorAll('[data-testid="remote-pane"] .tree-row')].find(e => e.querySelector('.tree-name')?.textContent.includes('server-file.txt')); row.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })) })()`)
+	await until(() => evaluate(`document.querySelector('.tab-wrapper.active .file-tab')?.textContent === 'server-file.txt [Root without mapping]'`), 'remote preview tab includes server name')
+	await screenshot('16-file-workspace')
+	await input('server-select', productionID)
+	await until(() => evaluate(`window.__uiMock.settings.activeConnectionID === ${JSON.stringify(productionID)}`), 'switch server with open remote tab')
+	assert.ok(await evaluate(`[...document.querySelectorAll('.file-tab')].some(e => e.textContent === 'server-file.txt [Root without mapping]')`), 'remote tab retains original server after switching')
+	await click('refresh-file')
+	await until(() => evaluate(`!document.querySelector('[data-testid="refresh-file"]').disabled`), 'remote preview refreshed')
+	assert.equal(await evaluate(`window.__uiMock.calls.filter(c => c.method === 'ReadRemoteFile').at(-1).connectionID`), rootOnlyID, 'refresh reads the tab original server')
+	console.log('Browser checks passed: settings, authorization, trees, queue, transfers, file previews, per-server tabs, default/explicit comparison, Ctrl+Shift+N search. Screenshots:', output)
 } catch (error) {
  if (socket?.readyState === WebSocket.OPEN) {
   try {

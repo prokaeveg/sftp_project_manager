@@ -4,6 +4,7 @@ import { backend, type AuthPrompt, type BatchPreview, type FileEntry, type Navig
 import FileTree from './components/FileTree.vue'
 import TransferQueue from './components/TransferQueue.vue'
 import TransferMenu from './components/TransferMenu.vue'
+import FileWorkspace from './components/FileWorkspace.vue'
 import { fromDeploymentPath, loadDirectory, selectTreeEntry, toggleDirectory, toMappingPath, treeRoot, type TreeNode } from './file-tree'
 
 function emptyProject(): Project { return { id: '', name: '', localRoot: '', connections: [] } }
@@ -36,7 +37,8 @@ const authAnswer = ref(''), authRemember = ref(false), authPromptError = ref('')
 const trees = reactive({ local: treeRoot(), remote: treeRoot() })
 const selections = reactive({ local: new Set<string>(), remote: new Set<string>() })
 const selectionAnchors: Record<'local' | 'remote', string | null | undefined> = { local: undefined, remote: undefined }
-const transferMenu = ref<{ side: 'local' | 'remote'; x: number; y: number }>()
+const transferMenu = ref<{ side: 'local' | 'remote'; x: number; y: number; file?: FileEntry }>()
+const fileWorkspace = ref<InstanceType<typeof FileWorkspace>>()
 
 const discovery = ref<SSHDiscovery>(), importedAlias = ref(''), effective = ref<SSHEffective>(), trustConfig = ref(false)
 const projects = computed(() => status.value?.settings.projects ?? [])
@@ -303,7 +305,25 @@ function openTransferMenu(side: 'local' | 'remote', event: MouseEvent, file?: Fi
  }
  if (!selections[side].size) return
  preview.value = undefined
- transferMenu.value = { side, x: event.clientX, y: event.clientY }
+ transferMenu.value = { side, x: event.clientX, y: event.clientY, file }
+}
+async function openFile(side: 'local' | 'remote', relative: string) {
+ if (side === 'remote' && queueRunning.value) return
+ await run(async () => { await fileWorkspace.value?.openFile(side, relative, side === 'remote' ? savedConnection.value?.id : '') })
+ if (side === 'remote') await syncNavigationStatus()
+}
+async function refreshFile(side: 'local' | 'remote', relative: string, connectionID: string) {
+ if (side === 'remote' && queueRunning.value) return
+ await run(async () => { await fileWorkspace.value?.refreshFile(side, relative, connectionID) })
+ if (side === 'remote') await syncNavigationStatus()
+}
+async function compareSelected(connectionID: string) {
+ const menu = transferMenu.value; transferMenu.value = undefined
+ if (!menu?.file || menu.file.isDir || busy.value || queueRunning.value) return
+ let relative: string
+ try { relative = projectSelectionPaths(menu.side)[0]! } catch (e) { error.value = explainError(e); return }
+ await run(async () => { await fileWorkspace.value?.compareFile(relative, connectionID) })
+ await syncNavigationStatus()
 }
 function projectSelectionPaths(side: 'local' | 'remote'): string[] {
  const paths = [...selections[side]]
@@ -482,8 +502,9 @@ onUnmounted(() => { queuePollingEnabled = false; authPollingEnabled = false; aut
    <section class="pane local-pane" data-testid="local-pane">
     <header class="pane-header"><div><h1>Проект</h1><div class="root-path" :title="project.localRoot">{{ project.localRoot }}</div></div><button class="icon-button" title="Обновить дерево проекта" aria-label="Обновить дерево проекта" :disabled="busy" @click="refreshLocal">⟳</button></header>
     <div class="tree-toolbar"><span>{{ selections.local.size }} выбрано</span><span class="toolbar-spacer"></span><button class="link-button" :disabled="busy || !selections.local.size" @click="clearSelection('local')">Снять выбор</button><button class="primary small" :disabled="busy || queueRunning || !selections.local.size || !savedConnection" @click="transferSelection('local', 'upload')">Загрузить на {{ quickConnection?.name ?? 'сервер' }}</button><button v-if="(savedProject?.connections.length ?? 0) > 1" class="quiet small transfer-server-button" :disabled="busy || queueRunning || !selections.local.size" @click="openTransferMenu('local', $event)">Загрузить на… ▸</button></div>
-    <div class="tree-scroll"><p v-if="trees.local.loading && !trees.local.loaded" class="empty-state">Загрузка файлов проекта…</p><p v-else-if="trees.local.error && !trees.local.children.length" class="empty-state" role="alert">{{ trees.local.error }} <button @click="refreshLocal">Повторить</button></p><ul class="file-tree tree-root"><FileTree :node="trees.local" :busy="busy" side="local" :selected="selections.local" @toggle="treeAction('local', $event)" @refresh="treeAction('local', $event, true)" @select="(file, event) => selectFile('local', file, event)" @context="(file, event) => openTransferMenu('local', event, file)" /></ul></div>
+    <div class="tree-scroll"><p v-if="trees.local.loading && !trees.local.loaded" class="empty-state">Загрузка файлов проекта…</p><p v-else-if="trees.local.error && !trees.local.children.length" class="empty-state" role="alert">{{ trees.local.error }} <button @click="refreshLocal">Повторить</button></p><ul class="file-tree tree-root"><FileTree :node="trees.local" :busy="busy" side="local" :selected="selections.local" @toggle="treeAction('local', $event)" @refresh="treeAction('local', $event, true)" @select="(file, event) => selectFile('local', file, event)" @context="(file, event) => openTransferMenu('local', event, file)" @open="openFile('local', $event.relativePath)" /></ul></div>
    </section>
+   <FileWorkspace ref="fileWorkspace" :project="project" :busy="busy" :remote-busy="queueRunning" @open-local="openFile('local', $event)" @refresh="refreshFile" />
    <section class="pane remote-pane" data-testid="remote-pane">
     <header class="pane-header remote-header"><div><h1>Сервер</h1><div class="root-path" :title="savedConnection?.rootPath || 'Сервер не выбран'">{{ savedConnection?.rootPath || 'Сервер не выбран' }}</div></div>
      <label class="header-select">Сервер <select data-testid="server-select" :value="status.settings.activeConnectionID ?? ''" :disabled="busy || !savedProject?.connections.length" @change="selectConnection(($event.target as HTMLSelectElement).value)"><option v-for="connection in savedProject?.connections" :key="connection.id" :value="connection.id">{{ connection.name }}</option></select></label>
@@ -498,11 +519,11 @@ onUnmounted(() => { queuePollingEnabled = false; authPollingEnabled = false; aut
     <div v-if="savedConnection" class="tree-toolbar"><span>{{ savedConnection.name }} · {{ selections.remote.size }} выбрано</span><span class="toolbar-spacer"></span><button class="link-button" :disabled="busy || !selections.remote.size" @click="clearSelection('remote')">Снять выбор</button><button class="primary small" :disabled="busy || queueRunning || !selections.remote.size || !trees.remote.loaded" @click="transferSelection('remote', 'download')">Скачать с {{ quickConnection?.name }}</button><button v-if="(savedProject?.connections.length ?? 0) > 1" class="quiet small transfer-server-button" :disabled="busy || queueRunning || !selections.remote.size" @click="openTransferMenu('remote', $event)">Скачать с… ▸</button></div>
     <div class="tree-scroll">
      <div v-if="!savedConnection" class="empty-server"><div class="empty-icon">⌁</div><h2>Сервер не настроен</h2><p>Добавьте SSH- или SFTP-сервер, чтобы просматривать и передавать файлы проекта.</p><button data-testid="add-server" class="primary" :disabled="busy" @click="openSettings">＋ Добавить сервер</button></div>
-     <template v-else><div v-if="!trees.remote.loaded && !trees.remote.loading" class="empty-server disconnected-state"><div class="empty-icon">⌁</div><h2>Сервер не подключён</h2><p>Подключитесь, чтобы открыть <strong>{{ savedConnection.rootPath }}</strong>.</p></div><p v-if="trees.remote.error" class="empty-state" role="alert">{{ trees.remote.error }} <button :disabled="busy || queueRunning" @click="connectRemote">Повторить</button></p><ul class="file-tree tree-root"><FileTree :node="trees.remote" :busy="busy || queueRunning" side="remote" :selected="selections.remote" @toggle="treeAction('remote', $event)" @refresh="treeAction('remote', $event, true)" @select="(file, event) => selectFile('remote', file, event)" @context="(file, event) => openTransferMenu('remote', event, file)" /></ul></template>
+     <template v-else><div v-if="!trees.remote.loaded && !trees.remote.loading" class="empty-server disconnected-state"><div class="empty-icon">⌁</div><h2>Сервер не подключён</h2><p>Подключитесь, чтобы открыть <strong>{{ savedConnection.rootPath }}</strong>.</p></div><p v-if="trees.remote.error" class="empty-state" role="alert">{{ trees.remote.error }} <button :disabled="busy || queueRunning" @click="connectRemote">Повторить</button></p><ul class="file-tree tree-root"><FileTree :node="trees.remote" :busy="busy || queueRunning" side="remote" :selected="selections.remote" @toggle="treeAction('remote', $event)" @refresh="treeAction('remote', $event, true)" @select="(file, event) => selectFile('remote', file, event)" @context="(file, event) => openTransferMenu('remote', event, file)" @open="openFile('remote', $event.relativePath)" /></ul></template>
     </div>
    </section>
   </section>
-  <TransferMenu v-if="transferMenu" :x="transferMenu.x" :y="transferMenu.y" :connections="savedProject?.connections ?? []" :current-id="quickConnection?.id" @close="transferMenu = undefined" @transfer="(direction, id) => transferSelection(transferMenu!.side, direction, id)" />
+  <TransferMenu v-if="transferMenu" :x="transferMenu.x" :y="transferMenu.y" :connections="savedProject?.connections ?? []" :current-id="quickConnection?.id" :can-compare="!!transferMenu.file && !transferMenu.file.isDir && selections[transferMenu.side].size === 1" @compare="compareSelected" @close="transferMenu = undefined" @transfer="(direction, id) => transferSelection(transferMenu!.side, direction, id)" />
   <TransferQueue v-if="queuePanelOpen" data-testid="queue-panel" :queue="queue" :error="queueError" :busy="queueBusy" :app-busy="busy" @pause="pauseQueue" @cancel="cancelQueueJob" @clear="clearFinishedQueue" @retry="retryQueueJob" />
 
   <dialog ref="settingsDialog" data-testid="settings-dialog" class="modal settings-modal" :class="{ 'wizard-modal': wizard }" @close="onSettingsClose" @cancel="cancelSettings">

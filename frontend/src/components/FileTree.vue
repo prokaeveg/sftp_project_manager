@@ -9,6 +9,7 @@ const emit = defineEmits<{
  transfer: [file: FileEntry]
  select: [file: FileEntry, event: MouseEvent | KeyboardEvent]
  context: [file: FileEntry, event: MouseEvent]
+ open: [file: FileEntry]
 }>()
 
 function select(event: MouseEvent | KeyboardEvent) {
@@ -21,6 +22,11 @@ function onKeydown(event: KeyboardEvent) {
  if (event.key !== 'Enter' && event.key !== ' ') return
  event.preventDefault()
  select(event)
+ if (event.key === 'Enter') open()
+}
+
+function open() {
+ if (!props.busy && !props.node.entry.isDir && !props.node.entry.isLink && !props.node.entry.excluded) emit('open', props.node.entry)
 }
 
 function onContextMenu(event: MouseEvent) {
@@ -40,6 +46,7 @@ function onContextMenu(event: MouseEvent) {
    :aria-expanded="node.entry.isDir && !node.entry.isLink ? node.expanded : undefined"
    :tabindex="node.entry.excluded || node.entry.isLink ? -1 : 0"
    @click="select($event)"
+   @dblclick="open"
    @keydown="onKeydown"
    @contextmenu="onContextMenu"
   >
@@ -70,7 +77,7 @@ function onContextMenu(event: MouseEvent) {
    <p v-if="node.loading" role="status" class="tree-message">Загрузка…</p>
    <div v-if="node.error" class="tree-message error" role="alert"><p>{{ node.error }}</p><p v-if="node.loaded">Показаны данные предыдущего чтения.</p><button type="button" :disabled="busy" @click="emit('refresh', node)">Повторить</button></div>
    <p v-else-if="node.loaded && !node.children.length && !node.loading" class="tree-message">Папка пуста</p>
-   <ul v-if="node.children.length" class="file-tree"><FileTree v-for="child in node.children" :key="child.entry.relativePath" :node="child" :busy="busy" :side="side" :selected="selected" @toggle="emit('toggle', $event)" @refresh="emit('refresh', $event)" @select="(file, event) => emit('select', file, event)" @context="(file, event) => emit('context', file, event)" /></ul>
+   <ul v-if="node.children.length" class="file-tree"><FileTree v-for="child in node.children" :key="child.entry.relativePath" :node="child" :busy="busy" :side="side" :selected="selected" @toggle="emit('toggle', $event)" @refresh="emit('refresh', $event)" @select="(file, event) => emit('select', file, event)" @context="(file, event) => emit('context', file, event)" @open="emit('open', $event)" /></ul>
   </template>
  </li>
 </template>

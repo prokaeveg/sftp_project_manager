@@ -161,7 +161,19 @@ export interface Status {
     }
 }
 
+export interface FileContent {
+    projectID: string; connectionID: string; server: string; name: string;
+    relativePath: string; path: string; text: string; size: number;
+    binary: boolean; truncated: boolean; encoding: string;
+}
+export interface FileComparison { local: FileContent; remote: FileContent; equal: boolean; comparable: boolean }
+export interface FileSearchResult { files: FileEntry[]; limited: boolean }
+
 interface API {
+    ReadLocalFile(projectID: string, relative: string): Promise<FileContent>;
+    ReadRemoteFile(projectID: string, connectionID: string, relative: string): Promise<FileContent>;
+    CompareFile(projectID: string, connectionID: string, relative: string): Promise<FileComparison>;
+    SearchProjectFiles(projectID: string, query: string): Promise<FileSearchResult>;
     GetStatus(): Promise<Status>;
 
     SaveProjectName(name: string): Promise<Status>;
