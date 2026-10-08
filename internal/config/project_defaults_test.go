@@ -145,3 +145,30 @@ func TestDeploymentPathsRejectEscapesAndAbsolutePaths(t *testing.T) {
 		t.Fatalf("resolve deployment: %q, %v", got, err)
 	}
 }
+
+func TestConnectionWithoutMappingsDefaultsAndValidatesRoot(t *testing.T) {
+	project := Project{ID: "p", Name: "Project", LocalRoot: t.TempDir(), Connections: []ProjectConnection{{ID: "c", Name: "Server", Connection: transport.Connection{Mode: "manual", Host: "example.test", User: "me", Port: 22}}}}
+	normalized, err := NormalizeProject(project)
+	if err != nil || normalized.Connections[0].RootPath != "/" || len(normalized.Connections[0].Mappings) != 0 {
+		t.Fatalf("empty server normalization: %+v, %v", normalized, err)
+	}
+	settings := Settings{SchemaVersion: SchemaVersion, Projects: []Project{normalized}, ActiveProjectID: "p", ActiveConnectionID: "c"}
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(settings); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := store.Load()
+	if err != nil || loaded.Profile != nil || loaded.ActiveConnectionID != "c" || loaded.ActiveMappingID != "" || loaded.Projects[0].Connections[0].RootPath != "/" {
+		t.Fatalf("empty server load: %+v, %v", loaded, err)
+	}
+	settings.Projects[0].Connections[0].RootPath = "relative"
+	if err := store.Save(settings); err == nil {
+		t.Fatal("invalid root was accepted for a server without mappings")
+	}
+	if err := validateSettings(Settings{SchemaVersion: SchemaVersion, Projects: []Project{{ID: "p", Name: "Project", LocalRoot: t.TempDir(), Connections: []ProjectConnection{{ID: "c", Name: "Server", RootPath: "/srv"}}}}, ActiveProjectID: "p", ActiveConnectionID: "c", ActiveMappingID: "unknown"}); err == nil {
+		t.Fatal("empty server accepted a nonexistent active mapping")
+	}
+}

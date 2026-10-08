@@ -2,6 +2,7 @@ package application
 
 import (
 	"awesomeProject/internal/config"
+	"awesomeProject/internal/credentials"
 	"awesomeProject/internal/transport"
 	"context"
 	"fmt"
@@ -29,6 +30,7 @@ type Service struct {
 	authMu           sync.Mutex
 	authPending      *pendingAuth
 	authClosed       bool
+	credentials      credentials.Store
 	mu               sync.Mutex
 	store            *config.Store
 	status           Status

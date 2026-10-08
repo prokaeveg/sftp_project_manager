@@ -72,3 +72,9 @@ Wails v2.16.0 и SFTP v1.13.11 зафиксированы в `go.mod`/`go.sum`; 
 - Проверена [документация Wails для Windows](https://wails.io/docs/guides/windows/): необходим WebView2; предусмотрены стратегия `error` и указание пути Fixed Version Runtime.
 - Проверена [документация Microsoft о распространении WebView2](https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution). Автономная поставка на целевой машине не проверена.
 - Дополнительные документы добавлять по мере необходимости; ссылки включать сюда. Не копировать сюда весь основной план.
+
+## Сохранение пароля и сервер без маппингов — 7 октября 2026
+
+Реализовано: галочка «Сохранить пароль» в диалоге, canRemember только для OpenSSH password-вопросов, ForgetSavedPassword в настройках. internal/credentials использует generic Windows Credential Manager с локальным постоянным хранением для текущего пользователя; JSON/portable ZIP секретов не содержат. internal/application/saved_password.go оборачивает открытие сессий навигации и передач, ключ — хеш Connection + хеш текста запроса. Подстановка один раз на попытку; повторный вопрос удаляет отклонённую запись; ручной ответ сохраняется только после успешного SSH/SFTP-входа. Одинаковые параметры в проектах используют общую запись. Passphrase/MFA пока не сохраняются. Контракт: password-auth.md.
+
+Новый сервер: rootPath `/`, mappings `[]`. Save/Load/Select допускают active connection без active mapping и Profile. navigationKey читает SSH-параметры непосредственно из выбранного подключения, поэтому навигация работает и без Profile; смена параметров закрывает старую сессию. Передача без маппинга отклоняется; первый маппинг добавляется вручную. Старые маппинги не удаляются. Проверены Go/race/vet, native Credential Manager, browser mock и Windows build; рабочая сеть/нативный UI остаются ручной проверкой.

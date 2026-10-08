@@ -241,6 +241,65 @@ func TestSaveProjectPreservesMappingAndFallsBackAfterMappingRemoval(t *testing.T
 	}
 }
 
+func TestServerWithoutMappingsCanBeSelectedAndLaterMapped(t *testing.T) {
+	service, executable := workspaceService(t)
+	root := t.TempDir()
+	connection := workspaceConnection("unmapped")
+	connection.RootPath = "/var/www/html"
+	connection.Mappings = nil
+	status, err := service.SaveProject(config.Project{Name: "Unmapped", LocalRoot: root, Connections: []config.ProjectConnection{connection}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := status.Settings.Projects[0]
+	serverID := project.Connections[0].ID
+	if status.Settings.ActiveConnectionID != serverID || status.Settings.ActiveMappingID != "" || status.Settings.Profile != nil {
+		t.Fatalf("unmapped server selection: %+v", status.Settings)
+	}
+	restarted, err := New(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, err = restarted.SelectProject(project.ID, serverID, "")
+	if err != nil || status.Settings.ActiveConnectionID != serverID || status.Settings.ActiveMappingID != "" || status.Settings.Profile != nil {
+		t.Fatalf("select unmapped server after restart: %+v, %v", status.Settings, err)
+	}
+	project = status.Settings.Projects[0]
+	project.Connections[0].Mappings = []config.Mapping{{LocalPath: ".", DeploymentPath: "."}}
+	status, err = restarted.SaveProject(project)
+	if err != nil || status.Settings.ActiveMappingID == "" || status.Settings.Profile == nil || status.Settings.Profile.RemoteRoot != "/var/www/html" {
+		t.Fatalf("adding first mapping: %+v, %v", status.Settings, err)
+	}
+	project = status.Settings.Projects[0]
+	project.Connections[0].Mappings = nil
+	status, err = restarted.SaveProject(project)
+	if err != nil || status.Settings.ActiveConnectionID != serverID || status.Settings.ActiveMappingID != "" || status.Settings.Profile != nil {
+		t.Fatalf("removing last mapping: %+v, %v", status.Settings, err)
+	}
+	project = status.Settings.Projects[0]
+	mapped := workspaceConnection("mapped")
+	mapped.RootPath = "/srv/app"
+	mapped.Mappings = []config.Mapping{{LocalPath: ".", DeploymentPath: "."}}
+	unmapped := workspaceConnection("another-unmapped")
+	unmapped.RootPath = "/srv/other"
+	unmapped.Mappings = nil
+	project.Connections = append(project.Connections, mapped, unmapped)
+	status, err = restarted.SaveProject(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project = status.Settings.Projects[0]
+	mappedID, unmappedID := project.Connections[1].ID, project.Connections[2].ID
+	status, err = restarted.SelectProject(project.ID, mappedID, "")
+	if err != nil || status.Settings.Profile == nil || status.Settings.Profile.RemoteRoot != "/srv/app" {
+		t.Fatalf("switch to mapped server: %+v, %v", status.Settings, err)
+	}
+	status, err = restarted.SelectProject(project.ID, unmappedID, "")
+	if err != nil || status.Settings.ActiveConnectionID != unmappedID || status.Settings.ActiveMappingID != "" || status.Settings.Profile != nil {
+		t.Fatalf("switch to unmapped server: %+v, %v", status.Settings, err)
+	}
+}
+
 func TestLegacyProfileBridgeCanRestoreServerAfterLastConnectionRemoval(t *testing.T) {
 	service, _ := workspaceService(t)
 	profile := sampleProfile(t)

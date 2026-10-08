@@ -65,8 +65,8 @@ func validateProject(project config.Project) error {
 		if err := c.Connection.Validate(); err != nil {
 			return fmt.Errorf("connection %q: %w", label, err)
 		}
-		if len(c.Mappings) == 0 {
-			return fmt.Errorf("добавьте хотя бы одно сопоставление в подключение %q", label)
+		if err := config.ValidateRootPath(c.RootPath); err != nil {
+			return fmt.Errorf("connection %q: %w", label, err)
 		}
 		for mi, m := range c.Mappings {
 			if strings.TrimSpace(m.LocalPath) == "" {
@@ -238,10 +238,17 @@ func projectSelection(project config.Project, preferredConnection, preferredMapp
 					return connection.ID, mapping.ID
 				}
 			}
+			if len(connection.Mappings) == 0 {
+				return connection.ID, ""
+			}
 			return connection.ID, connection.Mappings[0].ID
 		}
 	}
-	return project.Connections[0].ID, project.Connections[0].Mappings[0].ID
+	first := project.Connections[0]
+	if len(first.Mappings) == 0 {
+		return first.ID, ""
+	}
+	return first.ID, first.Mappings[0].ID
 }
 
 func cloneProject(p config.Project) config.Project {
@@ -306,7 +313,7 @@ func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Stat
 				c := &p.Connections[j]
 				if c.ID == connectionID {
 					connection = c
-					if mappingID == "" {
+					if mappingID == "" && len(c.Mappings) > 0 {
 						mappingID = c.Mappings[0].ID
 					}
 					for k := range c.Mappings {
@@ -320,7 +327,7 @@ func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Stat
 			}
 		}
 	}
-	if project == nil || len(project.Connections) > 0 && (connection == nil || selected == nil) || len(project.Connections) == 0 && (connectionID != "" || mappingID != "") {
+	if project == nil || len(project.Connections) > 0 && (connection == nil || len(connection.Mappings) > 0 && selected == nil || len(connection.Mappings) == 0 && mappingID != "") || len(project.Connections) == 0 && (connectionID != "" || mappingID != "") {
 		return Status{}, errors.New("проект, подключение или сопоставление не найдены")
 	}
 	settings.ActiveProjectID = projectID

@@ -97,8 +97,11 @@ func (a *App) ExecuteBatch(token string, existingPolicy string, includeEnvironme
 func (a *App) CancelOperation() { a.service.CancelOperation() }
 
 func (a *App) GetAuthPrompt() *application.AuthPrompt { return a.service.GetAuthPrompt() }
-func (a *App) RespondAuthPrompt(id, answer string, cancelled bool) error {
-	return a.service.RespondAuthPrompt(id, answer, cancelled)
+func (a *App) RespondAuthPrompt(id, answer string, cancelled, remember bool) error {
+	return a.service.RespondAuthPrompt(id, answer, cancelled, remember)
+}
+func (a *App) ForgetSavedPassword(projectID, connectionID string) error {
+	return a.service.ForgetSavedPassword(projectID, connectionID)
 }
 
 func (a *App) GetQueue() application.QueueState { return a.service.GetQueue() }

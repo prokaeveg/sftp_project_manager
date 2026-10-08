@@ -110,10 +110,11 @@ func NormalizeProject(project Project) (Project, error) {
 			}
 			m.RemotePath = ""
 		}
-		if len(connection.Mappings) > 0 {
-			if err := ValidateRootPath(connection.RootPath); err != nil {
-				return Project{}, fmt.Errorf("connection %q: %w", connection.Name, err)
-			}
+		if connection.RootPath == "" && len(connection.Mappings) == 0 {
+			connection.RootPath = "/"
+		}
+		if err := ValidateRootPath(connection.RootPath); err != nil {
+			return Project{}, fmt.Errorf("connection %q: %w", connection.Name, err)
 		}
 	}
 	return project, nil
@@ -217,8 +218,11 @@ func validateSettings(settings Settings) error {
 				return errors.New("invalid or duplicate connection ID")
 			}
 			connections[c.ID] = true
-			if strings.TrimSpace(c.Name) == "" || len(c.Mappings) == 0 {
+			if strings.TrimSpace(c.Name) == "" {
 				return errors.New("invalid connection structure")
+			}
+			if err := ValidateRootPath(c.RootPath); err != nil {
+				return fmt.Errorf("connection %q: %w", c.Name, err)
 			}
 			for _, m := range c.Mappings {
 				if strings.TrimSpace(m.ID) == "" || mappings[m.ID] {
@@ -252,11 +256,20 @@ func validateSettings(settings Settings) error {
 			if len(p.Connections) == 0 && settings.ActiveConnectionID == "" && settings.ActiveMappingID == "" {
 				return nil
 			}
-			if settings.ActiveConnectionID == "" || settings.ActiveMappingID == "" {
+			if settings.ActiveConnectionID == "" {
 				return errors.New("incomplete active selection")
 			}
 			for _, c := range p.Connections {
 				if c.ID == settings.ActiveConnectionID {
+					if len(c.Mappings) == 0 {
+						if settings.ActiveMappingID == "" {
+							return nil
+						}
+						return errors.New("active selection references an unknown mapping")
+					}
+					if settings.ActiveMappingID == "" {
+						return errors.New("incomplete active selection")
+					}
 					for _, m := range c.Mappings {
 						if m.ID == settings.ActiveMappingID {
 							return nil

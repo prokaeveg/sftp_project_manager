@@ -169,7 +169,7 @@ func (s *Service) remoteOperation(parent context.Context, profile config.Profile
 	executable := s.status.SSHPath
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); s.cancelOperation = nil; s.mu.Unlock() }()
-	session, err := transport.Open(transport.WithAuthPrompt(ctx, s.requestAuth), executable, profile.Connection)
+	session, err := s.openAuthenticated(ctx, executable, profile.Connection, nil)
 	if err != nil {
 		return err
 	}
