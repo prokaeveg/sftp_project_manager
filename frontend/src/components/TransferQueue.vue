@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { QueueJob, QueueState, QueueItem } from '../bridge'
+import { formatBytes } from '../format-bytes'
 
 const props = defineProps<{
  queue: QueueState;
@@ -24,14 +25,6 @@ const counts = computed(() => {
 
 function label(status: QueueJob['status'] | QueueItem['status']) {
  return ({ waiting: 'В очереди', running: 'Передаётся', completed: 'Готово', skipped: 'Пропущено', failed: 'Ошибка', cancelled: 'Отменено' } as const)[status]
-}
-
-function bytes(value: number) {
- if (value < 1024) return `${value} Б`
- const units = ['КБ', 'МБ', 'ГБ', 'ТБ']
- let amount = value / 1024, unit = 0
- while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit++ }
- return `${amount.toLocaleString('ru-RU', { maximumFractionDigits: 1 })} ${units[unit]}`
 }
 
 function percent(job: QueueJob) {
@@ -61,9 +54,9 @@ function retryable(job: QueueJob) { return (job.status === 'failed' || job.statu
      <button v-if="retryable(job)" data-testid="queue-retry" type="button" class="quiet small" :disabled="busy || appBusy || queue.jobs.some(candidate => candidate.status === 'running')" @click="emit('retry', job.id)">Повторить…</button>
     </div>
     <div class="queue-progress" role="progressbar" :aria-label="`Передача ${job.projectName}`" :aria-valuenow="percent(job)" aria-valuemin="0" aria-valuemax="100"><span :style="{ width: `${percent(job)}%` }" :class="{ 'progress-failed': job.status === 'failed', 'progress-cancelled': job.status === 'cancelled' }"></span></div>
-    <div class="queue-meta"><span>{{ job.processedItems }} из {{ job.items.length }} элементов обработано</span><span>Скопировано {{ bytes(job.transferredBytes) }} из {{ bytes(job.totalBytes) }} · {{ percent(job) }}%</span></div>
+    <div class="queue-meta"><span>{{ job.processedItems }} из {{ job.items.length }} элементов обработано</span><span>Скопировано {{ formatBytes(job.transferredBytes) }} из {{ formatBytes(job.totalBytes) }} · {{ percent(job) }}%</span></div>
     <p v-if="job.error" class="queue-error">{{ job.error }}</p>
-    <details class="queue-details"><summary>Показать файлы ({{ job.items.length }})</summary><div class="queue-items"><div v-for="item in job.items" :key="item.relativePath" class="queue-item"><span class="queue-item-status" :class="`status-${item.status}`">{{ label(item.status) }}</span><details class="queue-item-paths"><summary :title="item.relativePath">{{ item.relativePath }}</summary><dl><dt>Источник</dt><dd :title="item.source">{{ item.source || item.relativePath }}</dd><dt>Назначение</dt><dd :title="item.destination">{{ item.destination }}</dd></dl></details><span v-if="item.kind === 'file'" class="queue-item-bytes">Скопировано {{ bytes(item.transferredBytes) }} из {{ bytes(item.size) }}</span><span v-else class="queue-item-bytes">Папка</span><span v-if="item.error" class="queue-item-error" :title="item.error">{{ item.error }}</span></div></div></details>
+    <details class="queue-details"><summary>Показать файлы ({{ job.items.length }})</summary><div class="queue-items"><div v-for="item in job.items" :key="item.relativePath" class="queue-item"><span class="queue-item-status" :class="`status-${item.status}`">{{ label(item.status) }}</span><details class="queue-item-paths"><summary :title="item.relativePath">{{ item.relativePath }}</summary><dl><dt>Источник</dt><dd :title="item.source">{{ item.source || item.relativePath }}</dd><dt>Назначение</dt><dd :title="item.destination">{{ item.destination }}</dd></dl></details><span v-if="item.kind === 'file'" class="queue-item-bytes">Скопировано {{ formatBytes(item.transferredBytes) }} из {{ formatBytes(item.size) }}</span><span v-else class="queue-item-bytes">Папка</span><span v-if="item.error" class="queue-item-error" :title="item.error">{{ item.error }}</span></div></div></details>
    </article>
   </div>
  </section>

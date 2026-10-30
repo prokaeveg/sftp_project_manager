@@ -35,6 +35,8 @@ export interface ProjectConnection {
 }
 
 export interface Project {
+    glowSize?: number;
+    color?: string;
     id: string;
     name: string;
     localRoot: string;

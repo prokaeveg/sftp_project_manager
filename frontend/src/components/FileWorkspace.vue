@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { backend, type FileContent, type FileComparison, type FileSearchResult, type Project } from '../bridge'
 import { compareLines } from '../file-diff'
+import { formatBytes } from '../format-bytes'
 
 const props = defineProps<{ project: Project; busy: boolean; remoteBusy: boolean }>()
 const emit = defineEmits<{ openLocal: [relative: string]; refresh: [side: 'local' | 'remote', relative: string, connectionID: string] }>()
@@ -122,7 +123,7 @@ defineExpose({ openFile, refreshFile, compareFile, openSearch })
     <p v-if="active.truncated || lines.length > 10000" class="viewer-warning">Показана только часть файла (лимит 2 МиБ / 10 000 строк).</p>
     <div class="code-viewer" role="region" aria-label="Содержимое файла" tabindex="0" data-testid="file-content"><div v-for="(line, index) in visibleLines" :key="index" class="code-line"><span class="line-number" aria-hidden="true">{{ index + 1 }}</span><code>{{ line || ' ' }}</code></div></div>
    </template>
-   <footer class="editor-status">Только чтение <span>{{ active.encoding || 'Бинарный' }} · {{ active.size }} Б</span></footer>
+   <footer class="editor-status">Только чтение <span>{{ active.encoding || 'Бинарный' }} · {{ formatBytes(active.size) }}</span></footer>
   </template>
   <div v-else class="editor-empty"><span class="empty-icon">≡</span><h2>Предпросмотр файла</h2><p>Откройте файл двойным кликом в дереве.</p><button class="quiet" @click="openSearch">Найти файл <kbd>Ctrl+Shift+N</kbd></button></div>
  </section>

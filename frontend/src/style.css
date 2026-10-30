@@ -26,3 +26,15 @@ input,select,textarea{background:#17191d;border:1px solid #41454d;border-radius:
 @media(max-width:1050px){.workspace{grid-template-columns:minmax(175px,.8fr) minmax(230px,1.3fr) minmax(195px,.9fr)}.local-pane .tree-toolbar,.remote-pane .tree-toolbar{font-size:10px;gap:5px}.root-path{max-width:100%}}
 .editor-tabs{overflow:hidden}.tabs-list{display:flex;flex:1;min-width:0;overflow-x:auto;min-height:38px}.editor-tabs>.icon-button{flex:none;margin:0 4px}
 .tree-row{cursor:default;user-select:none}.tree-row:focus-visible{outline:1px solid #5892e3;outline-offset:-1px}.tree-toggle{flex:none;width:19px;min-width:19px;justify-content:center;padding:2px}.tree-disclosure-spacer{width:19px;min-width:19px}.tree-toolbar{height:auto;min-height:34px;flex-wrap:wrap;padding-top:4px;padding-bottom:4px}.tree-toolbar .primary{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.transfer-server-button{font-size:11px}.transfer-menu{position:fixed;z-index:1000;width:274px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow:auto;padding:5px;background:#272b32;border:1px solid #49515f;border-radius:6px;box-shadow:0 8px 28px #0008}.transfer-menu button{width:100%;border:0;background:transparent;text-align:left;padding:7px 10px;display:flex;justify-content:space-between;gap:10px;overflow-wrap:anywhere}.transfer-menu button:hover:not(:disabled),.transfer-menu button:focus-visible{background:#354860;outline:0}.menu-divider{height:1px;background:#454b55;margin:4px}.server-submenu{margin:1px 5px 4px 12px;padding-left:6px;border-left:1px solid #596578}.menu-hint{font-size:11px;color:var(--muted);padding:0 10px}
+
+/* Rounded workspace surfaces and splitter hit targets. */
+.workspace.resizable-workspace{padding:6px;gap:0;background:transparent;overflow:auto}
+.resizable-workspace>.pane{border-radius:10px;overflow:hidden}
+.panel-splitter{position:relative;cursor:col-resize;touch-action:none;outline:none}
+.panel-splitter::after{content:"";position:absolute;inset:7px 2px;border-radius:2px;background:transparent;transition:background .12s}
+.panel-splitter:hover::after,.panel-splitter:focus-visible::after,.panel-splitter.dragging::after{background:var(--accent)}
+.app-shell.project-glow{background:radial-gradient(ellipse var(--glow-width,760px) var(--glow-height,360px) at 190px 0,color-mix(in srgb,var(--project-color) 42%,transparent),transparent),#25282e}
+.project-glow>.topbar{background:transparent;border-bottom:0}
+.project-color-field input[type=color]{width:64px;height:32px;padding:3px;cursor:pointer}
+.project-glow-field input[type=range]{width:min(320px,100%);padding:0;accent-color:var(--accent);cursor:pointer}
+.project-glow-field output{font-variant-numeric:tabular-nums;color:var(--muted)}

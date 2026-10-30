@@ -27,6 +27,8 @@ type Settings struct {
 }
 
 type Project struct {
+	GlowSize                  int                 `json:"glowSize,omitempty"`
+	Color                     string              `json:"color,omitempty"`
 	ID                        string              `json:"id"`
 	Name                      string              `json:"name"`
 	LocalRoot                 string              `json:"localRoot"`
@@ -66,6 +68,22 @@ func Default() Settings { return Settings{SchemaVersion: SchemaVersion, Projects
 // connection root plus paths relative to that root. It returns a copy and
 // clears deprecated RemotePath values so subsequent saves are canonical.
 func NormalizeProject(project Project) (Project, error) {
+	if project.GlowSize < 25 || project.GlowSize > 150 {
+		project.GlowSize = 100
+	}
+	validColor := len(project.Color) == 7 && strings.HasPrefix(project.Color, "#")
+	if validColor {
+		for _, c := range project.Color[1:] {
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F') {
+				validColor = false
+				break
+			}
+		}
+	}
+	if !validColor {
+		project.Color = "#517bbd"
+	}
+
 	project.SearchExcludedDirectories = append([]string(nil), project.SearchExcludedDirectories...)
 	project.SearchIncludedDirectories = append([]string(nil), project.SearchIncludedDirectories...)
 	for _, directories := range [][]string{project.SearchExcludedDirectories, project.SearchIncludedDirectories} {
@@ -82,6 +100,9 @@ func NormalizeProject(project Project) (Project, error) {
 	for ci := range project.Connections {
 		connection := &project.Connections[ci]
 		connection.Mappings = append([]Mapping(nil), connection.Mappings...)
+		if connection.Mappings == nil {
+			connection.Mappings = []Mapping{}
+		}
 		legacy := false
 		for _, m := range connection.Mappings {
 			if m.RemotePath != "" {
