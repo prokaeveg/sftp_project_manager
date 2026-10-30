@@ -29,6 +29,9 @@ go.work.sum
 # Editor/IDE
 .idea/
 /.docker/
+/docs/
+/scripts/verify-ui.mjs
+/frontend/package.json.md5
 # .vscode/
 
 # Generated application artifacts
