@@ -4,6 +4,7 @@ import { backend, type AuthPrompt, type BatchPreview, type FileEntry, type FileC
 import FileTree from './components/FileTree.vue'
 import ResizableWorkspace from './components/ResizableWorkspace.vue'
 import TransferQueue from './components/TransferQueue.vue'
+import { recentBranches } from './git-recent'
 import TransferMenu from './components/TransferMenu.vue'
 import FileWorkspace from './components/FileWorkspace.vue'
 import { directorySearchExcluded } from './search-exclusions'
@@ -497,6 +498,11 @@ async function refreshFile(side: 'local' | 'remote', relative: string, connectio
  await run(async () => { await fileWorkspace.value?.refreshFile(side, relative, connectionID) })
  if (side === 'remote') await syncNavigationStatus()
 }
+async function compareGitSelected(ref?: string) {
+ const menu = transferMenu.value; transferMenu.value = undefined
+ if (!menu?.file || menu.side !== 'local' || menu.file.isDir || selections.local.size !== 1 || busy.value) return
+ await fileWorkspace.value?.openGitCompare(menu.file.relativePath, ref)
+}
 async function compareSelected(connectionID: string) {
  const menu = transferMenu.value; transferMenu.value = undefined
  if (!menu?.file || menu.file.isDir || selections[menu.side].size !== 1 || busy.value || queueRunning.value) return
@@ -733,7 +739,7 @@ onUnmounted(() => { gitPollingEnabled = false; gitRequest++; if (gitTimer) clear
    </template>
   </ResizableWorkspace>
   </div>
-  <TransferMenu can-copy :can-transfer="!transferMenu?.file?.excluded && !transferMenu?.file?.isLink" :copy-connection-id="transferMenu?.side === 'remote' ? savedConnection?.id : quickConnection?.id" @copy-path="copySelectedPaths" :can-refresh-directory="!!transferMenu?.file?.isDir && !transferMenu.file.excluded && !transferMenu.file.isLink" @refresh-directory="refreshContextDirectory" v-if="transferMenu" :x="transferMenu.x" :y="transferMenu.y" :connections="savedProject?.connections ?? []" :current-id="quickConnection?.id" :can-exclude-directory="transferMenu.side === 'local' && !transferMenu.file?.isLink && !!transferMenu.file?.isDir && transferMenu.file.relativePath !== '.'" :search-excluded="transferMenu.file?.searchExcluded" @exclude-directory="setDirectorySearchExcluded" :can-compare="!!transferMenu.file && !transferMenu.file.excluded && !transferMenu.file.isLink && !transferMenu.file.isDir && selections[transferMenu.side].size === 1" @compare="compareSelected" @close="transferMenu = undefined" @transfer="(direction, id) => transferSelection(transferMenu!.side, direction, id)" />
+  <TransferMenu :can-compare-git="git.available && transferMenu?.side === 'local' && !!transferMenu.file && !transferMenu.file.isDir && !transferMenu.file.isLink && !transferMenu.file.excluded && !transferMenu.file.missing && selections.local.size === 1" :recent-git="recentBranches(savedProject?.localRoot ?? '')" @compare-git="compareGitSelected" can-copy :can-transfer="!transferMenu?.file?.excluded && !transferMenu?.file?.isLink" :copy-connection-id="transferMenu?.side === 'remote' ? savedConnection?.id : quickConnection?.id" @copy-path="copySelectedPaths" :can-refresh-directory="!!transferMenu?.file?.isDir && !transferMenu.file.excluded && !transferMenu.file.isLink" @refresh-directory="refreshContextDirectory" v-if="transferMenu" :x="transferMenu.x" :y="transferMenu.y" :connections="savedProject?.connections ?? []" :current-id="quickConnection?.id" :can-exclude-directory="transferMenu.side === 'local' && !transferMenu.file?.isLink && !!transferMenu.file?.isDir && transferMenu.file.relativePath !== '.'" :search-excluded="transferMenu.file?.searchExcluded" @exclude-directory="setDirectorySearchExcluded" :can-compare="!!transferMenu.file && !transferMenu.file.excluded && !transferMenu.file.isLink && !transferMenu.file.isDir && selections[transferMenu.side].size === 1" @compare="compareSelected" @close="transferMenu = undefined" @transfer="(direction, id) => transferSelection(transferMenu!.side, direction, id)" />
   <TransferQueue v-if="queuePanelOpen" data-testid="queue-panel" :queue="queue" :error="queueError" :busy="queueBusy" :app-busy="busy" @pause="pauseQueue" @cancel="cancelQueueJob" @clear="clearFinishedQueue" @retry="retryQueueJob" />
 
   <dialog ref="settingsDialog" data-testid="settings-dialog" class="modal settings-modal" :class="{ 'wizard-modal': wizard }" @close="onSettingsClose" @cancel="cancelSettings">

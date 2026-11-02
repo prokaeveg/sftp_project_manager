@@ -1,9 +1,9 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import type { ProjectConnection } from '../bridge'
-const props = defineProps<{ x: number; y: number; connections: ProjectConnection[]; currentId?: string; canCopy?: boolean; canTransfer?: boolean; copyConnectionId?: string; canCompare?: boolean; canRefreshDirectory?: boolean; canExcludeDirectory?: boolean; searchExcluded?: boolean }>()
-const emit = defineEmits<{ copyPath: [kind: 'local' | 'project' | 'server', connectionID?: string]; close: []; refreshDirectory: []; transfer: [direction: 'upload' | 'download', connectionID: string]; compare: [connectionID: string]; excludeDirectory: [excluded: boolean] }>()
-const menu = ref<HTMLElement>(), submenu = ref<'upload' | 'download' | 'compare' | 'copy'>()
+const props = defineProps<{ x: number; y: number; connections: ProjectConnection[]; currentId?: string; canCopy?: boolean; canTransfer?: boolean; copyConnectionId?: string; canCompare?: boolean; canCompareGit?: boolean; recentGit?: string[]; canRefreshDirectory?: boolean; canExcludeDirectory?: boolean; searchExcluded?: boolean }>()
+const emit = defineEmits<{ copyPath: [kind: 'local' | 'project' | 'server', connectionID?: string]; close: []; refreshDirectory: []; transfer: [direction: 'upload' | 'download', connectionID: string]; compare: [connectionID: string]; compareGit: [ref?: string]; excludeDirectory: [excluded: boolean] }>()
+const menu = ref<HTMLElement>(), submenu = ref<'upload' | 'download' | 'compare' | 'copy' | 'git'>()
 const left = ref(0), top = ref(0)
 const current = computed(() => props.connections.find(c => c.id === props.currentId))
 const copyServer = computed(() => props.connections.find(c => c.id === props.copyConnectionId) ?? current.value)
@@ -54,6 +54,14 @@ onUnmounted(() => { document.removeEventListener('pointerdown', outside); window
      <button role="menuitem" data-testid="menu-copy-servers" aria-haspopup="menu" :aria-expanded="submenu === 'copy'" @mouseenter="submenu = 'copy'" @click="submenu = submenu === 'copy' ? undefined : 'copy'">Копировать путь на сервере… <span>▸</span></button>
      <div v-if="submenu === 'copy'" class="server-submenu" role="menu" aria-label="Сервер для копирования пути"><button v-for="connection in connections" :key="connection.id" role="menuitem" :data-copy-server-id="connection.id" @click="emit('copyPath', 'server', connection.id)">{{ connection.name }}<span v-if="connection.id === copyServer?.id">✓</span></button></div>
     </template>
+   </template>
+   <template v-if="canCompareGit">
+    <div class="menu-divider"></div>
+    <button role="menuitem" data-testid="menu-compare-git" aria-haspopup="menu" :aria-expanded="submenu === 'git'" @mouseenter="submenu = 'git'" @click="submenu = submenu === 'git' ? undefined : 'git'">Сравнить с Git <span>▸</span></button>
+    <div v-if="submenu === 'git'" class="server-submenu" role="menu" aria-label="Сравнить с Git">
+     <button v-for="ref in recentGit" :key="ref" role="menuitem" @click="emit('compareGit', ref)">{{ ref.replace(/^refs\/(heads|remotes)\//, '') }}</button>
+     <button role="menuitem" data-testid="menu-select-git-branch" @click="emit('compareGit')">Выбрать ветку…</button>
+    </div>
    </template>
    <template v-if="canCompare">
     <div class="menu-divider"></div>

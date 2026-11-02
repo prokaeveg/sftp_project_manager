@@ -182,7 +182,11 @@ export type GitState = 'clean' | 'ignored' | 'untracked' | 'added' | 'modified' 
 export interface GitFile { isDir?: boolean; path: string; status: GitState; previousPath?: string }
 export interface GitSnapshot { available: boolean; message?: string; files: GitFile[] }
 
+export interface GitBranch { ref: string; name: string }
+
 interface API {
+    GetGitBranches(projectID: string): Promise<GitBranch[]>;
+    CompareGitFile(projectID: string, relative: string, ref: string): Promise<FileComparison>;
     CopyPaths(projectID: string, side: 'local' | 'remote', sourceID: string, targetID: string, relatives: string[], kind: 'local' | 'project' | 'server'): Promise<void>;
     GetGitStatus(projectID: string): Promise<GitSnapshot>;
     PreviewPhpStormProject(root: string): Promise<PhpStormPreview>;

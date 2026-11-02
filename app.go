@@ -180,3 +180,10 @@ func (a *App) SaveProjectName(name string) (application.Status, error) {
 	}
 	return a.GetStatus(), nil
 }
+
+func (a *App) GetGitBranches(projectID string) ([]gitstatus.Branch, error) {
+	return a.service.GetGitBranches(a.ctx, projectID)
+}
+func (a *App) CompareGitFile(projectID, relative, ref string) (application.FileComparison, error) {
+	return a.service.CompareGitFile(a.ctx, projectID, relative, ref)
+}
