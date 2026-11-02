@@ -113,6 +113,18 @@ func validateProject(project config.Project) error {
 }
 
 func (s *Service) SaveProject(project config.Project) (Status, error) {
+	return s.saveProject(project, false)
+}
+
+// CreateImportedProject cannot update or replace an existing project.
+func (s *Service) CreateImportedProject(project config.Project) (Status, error) {
+	if project.ID != "" {
+		return Status{}, errors.New("импорт может создать только новый проект")
+	}
+	return s.saveProject(project, true)
+}
+
+func (s *Service) saveProject(project config.Project, imported bool) (Status, error) {
 	var navigationToClose *transport.Session
 	defer func() { closeNavigationSession(navigationToClose) }()
 	project = cloneProject(project)
@@ -157,6 +169,16 @@ func (s *Service) SaveProject(project config.Project) (Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	settings := cloneSettings(s.status.Settings)
+	if imported {
+		for _, existing := range settings.Projects {
+			if sameProjectRoot(existing.LocalRoot, project.LocalRoot) {
+				return Status{}, errors.New("проект с этой локальной папкой уже существует")
+			}
+			if strings.EqualFold(strings.TrimSpace(existing.Name), project.Name) {
+				return Status{}, errors.New("проект с таким названием уже существует; измените название")
+			}
+		}
+	}
 	idx := -1
 	for i, p := range settings.Projects {
 		if p.ID == project.ID {

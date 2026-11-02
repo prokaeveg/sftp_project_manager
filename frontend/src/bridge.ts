@@ -71,6 +71,7 @@ export interface FileEntry {
     isDir: boolean;
     isLink: boolean;
     excluded: boolean
+    missing?: boolean;
     searchExcluded?: boolean
 }
 
@@ -175,7 +176,17 @@ export interface FileContent {
 export interface FileComparison { local: FileContent; remote: FileContent; equal: boolean; comparable: boolean }
 export interface FileSearchResult { files: FileEntry[]; limited: boolean }
 
+export interface PhpStormPreview { project: Project; warnings: string[]; aliasConnectionIDs: string[] }
+
+export type GitState = 'clean' | 'ignored' | 'untracked' | 'added' | 'modified' | 'deleted' | 'conflict'
+export interface GitFile { isDir?: boolean; path: string; status: GitState; previousPath?: string }
+export interface GitSnapshot { available: boolean; message?: string; files: GitFile[] }
+
 interface API {
+    CopyPaths(projectID: string, side: 'local' | 'remote', sourceID: string, targetID: string, relatives: string[], kind: 'local' | 'project' | 'server'): Promise<void>;
+    GetGitStatus(projectID: string): Promise<GitSnapshot>;
+    PreviewPhpStormProject(root: string): Promise<PhpStormPreview>;
+    CreateImportedProject(project: Project): Promise<Status>;
     ReadLocalFile(projectID: string, relative: string): Promise<FileContent>;
     ReadRemoteFile(projectID: string, connectionID: string, relative: string): Promise<FileContent>;
     CompareFile(projectID: string, connectionID: string, relative: string): Promise<FileComparison>;

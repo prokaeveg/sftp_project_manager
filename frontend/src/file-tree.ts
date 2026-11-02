@@ -17,7 +17,7 @@ export function treeRoot(): TreeNode {
 export type DirectoryLoader = (relative: string) => Promise<FileEntry[]>
 
 export function selectEntry(selection: Set<string>, entry: FileEntry, checked: boolean): void {
- if (entry.isLink || entry.excluded) return
+ if (entry.isLink || entry.excluded || entry.missing) return
  if (checked) selection.add(entry.relativePath)
  else selection.delete(entry.relativePath)
 }
@@ -35,7 +35,7 @@ export function selectTreeEntry(
  event: TreeSelectionEvent,
  anchor: string | null = null
 ): string | null {
- if (entry.isLink || entry.excluded) return anchor
+ if (entry.isLink || entry.excluded || entry.missing) return anchor
 
  const visible: FileEntry[] = []
  const visit = (node: TreeNode) => {
@@ -55,7 +55,7 @@ export function selectTreeEntry(
   if (!additive) selection.clear()
   for (let index = start; index <= end; index++) {
    const item = visible[index]
-   if (!item.isLink && !item.excluded) selection.add(item.relativePath)
+   if (!item.isLink && !item.excluded && !item.missing) selection.add(item.relativePath)
   }
   return anchorIndex < 0 ? entry.relativePath : anchor
  }
@@ -128,4 +128,30 @@ export async function toggleDirectory(node: TreeNode, loader: DirectoryLoader): 
  if (node.expanded) { node.expanded = false; return }
  node.expanded = true
  if (!node.loaded || node.error) await loadDirectory(node, loader)
+}
+
+
+// Expand only the target's ancestors, preserving unrelated branches and caches.
+export async function revealTreeEntry(root: TreeNode, relative: string, loader: DirectoryLoader): Promise<TreeNode> {
+ const parts = relative.replace(/\\/g, '/').split('/')
+ if (!relative || relative.startsWith('/') || /^[a-zA-Z]:/.test(relative) || parts.some(part => !part || part === '.' || part === '..')) throw new Error('Путь файла должен находиться внутри проекта.')
+ let parent = root
+ for (let index = 0; index < parts.length; index++) {
+  if (!parent.entry.isDir || parent.entry.isLink || parent.entry.excluded) throw new Error('Папка файла недоступна для просмотра.')
+  const cached = parent.loaded && !parent.error
+  if (!cached) await loadDirectory(parent, loader)
+  parent.expanded = true
+  const path = parts.slice(0, index + 1).join('/')
+  let child = parent.children.find(node => node.entry.relativePath === path)
+  // The file may have appeared since this branch was last loaded.
+  if (!child && cached) {
+   await loadDirectory(parent, loader)
+   child = parent.children.find(node => node.entry.relativePath === path)
+  }
+  if (!child) throw new Error(`Файл или папка «${path}» больше не существует в проекте.`)
+  if (child.entry.isLink || child.entry.excluded) throw new Error(`Путь «${path}» исключён или является ссылкой.`)
+  if (index === parts.length - 1) return child
+  parent = child
+ }
+ throw new Error('Не выбран файл для показа в дереве.')
 }

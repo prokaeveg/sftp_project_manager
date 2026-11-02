@@ -3,6 +3,7 @@ package main
 import (
 	"awesomeProject/internal/application"
 	"awesomeProject/internal/config"
+	"awesomeProject/internal/gitstatus"
 	"awesomeProject/internal/mapping"
 	"awesomeProject/internal/sshconfig"
 	"awesomeProject/internal/transport"
@@ -60,12 +61,42 @@ func (a *App) SaveProject(project config.Project) (application.Status, error) {
 	}
 	return a.GetStatus(), nil
 }
+func (a *App) PreviewPhpStormProject(root string) (application.PhpStormPreview, error) {
+	return a.service.PreviewPhpStormProject(root)
+}
+func (a *App) CreateImportedProject(project config.Project) (application.Status, error) {
+	if _, err := a.service.CreateImportedProject(project); err != nil {
+		return application.Status{}, err
+	}
+	return a.GetStatus(), nil
+}
+
 func (a *App) SelectProject(projectID, connectionID, mappingID string) (application.Status, error) {
 	if _, err := a.service.SelectProject(projectID, connectionID, mappingID); err != nil {
 		return application.Status{}, err
 	}
 	return a.GetStatus(), nil
 }
+
+// GetGitStatus reads only the selected project's local repository.
+func (a *App) GetGitStatus(projectID string) (gitstatus.Snapshot, error) {
+	return a.service.GetGitStatus(a.ctx, projectID)
+}
+
+func (a *App) CopyPaths(projectID, side, sourceID, targetID string, relatives []string, kind string) error {
+	if a.uiCtx == nil {
+		return fmt.Errorf("буфер обмена доступен только в окне приложения")
+	}
+	text, err := a.service.CopiedPaths(projectID, side, sourceID, targetID, relatives, kind)
+	if err != nil {
+		return err
+	}
+	if err := runtime.ClipboardSetText(a.uiCtx, text); err != nil {
+		return fmt.Errorf("не удалось записать пути в буфер обмена: %w", err)
+	}
+	return nil
+}
+
 func (a *App) ListLocal(relative string) ([]application.FileEntry, error) {
 	return a.service.ListLocal(relative)
 }

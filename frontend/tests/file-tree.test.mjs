@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { treeRoot, treeNode, toggleDirectory, loadDirectory, selectEntry, selectTreeEntry, toMappingPath, fromDeploymentPath } from '../src/file-tree.ts'
+import { treeRoot, treeNode, revealTreeEntry, toggleDirectory, loadDirectory, selectEntry, selectTreeEntry, toMappingPath, fromDeploymentPath } from '../src/file-tree.ts'
 
 const folder = (name, relativePath = name) => ({ name, relativePath, size: 0, isDir: true, isLink: false, excluded: false })
 const file = (name, relativePath = name) => ({ ...folder(name, relativePath), isDir: false, size: 12 })
@@ -170,4 +170,35 @@ test('server-root translation rejects absolute and traversal paths', () => {
  assert.throws(() => fromDeploymentPath('../secret', '.', '.'), /выходит за пределы корня/)
  assert.throws(() => fromDeploymentPath('C:/outside/file', '.', '.'), /должен быть относительным/)
  assert.throws(() => fromDeploymentPath('safe/file', '../outside', '.'), /выходит за пределы корня/)
+})
+
+
+test('reveal expands only ancestors and reuses loaded branches', async () => {
+ const root = treeRoot(), calls = []
+ const loader = async path => {
+  calls.push(path)
+  return path === '.' ? [folder('src'), folder('other')] : path === 'src' ? [folder('deep','src/deep')] : [file('sample.ts','src/deep/sample.ts')]
+ }
+ const result = await revealTreeEntry(root,'src/deep/sample.ts',loader)
+ assert.equal(result.entry.relativePath,'src/deep/sample.ts')
+ assert.deepEqual(calls,['.','src','src/deep'])
+ assert.equal(root.expanded,true)
+ assert.equal(root.children[0].expanded,true)
+ assert.equal(root.children[1].expanded,false)
+ await revealTreeEntry(root,'src/deep/sample.ts',loader)
+ assert.equal(calls.length,3,'cached ancestors reused')
+})
+test('reveal refreshes stale parent, rejects unsafe paths and reports missing files', async () => {
+ const root = treeRoot()
+ await loadDirectory(root,async()=>[])
+ const result = await revealTreeEntry(root,'new.txt',async()=>[file('new.txt')])
+ assert.equal(result.entry.relativePath,'new.txt')
+ await assert.rejects(revealTreeEntry(root,'missing',async()=>[]),/больше не существует/)
+ for (const path of ['../outside','/absolute','C:/absolute','a/../b','']) {
+  await assert.rejects(revealTreeEntry(root,path,async()=>{throw Error('must not read')}),/внутри проекта/)
+ }
+ for (const entry of [{...folder('src'),excluded:true},{...folder('src'),isLink:true}]) {
+  const root = treeRoot()
+  await assert.rejects(revealTreeEntry(root,'src/file',async()=>[entry]),/исключён или является ссылкой/)
+ }
 })

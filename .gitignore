@@ -23,14 +23,14 @@ go.work
 go.work.sum
 
 # env file
-.env
+.env+
 .git
 
 # Editor/IDE
 .idea/
 /.docker/
 /docs/
-/scripts/verify-ui.mjs
+/scripts/verify
 /frontend/package.json.md5
 # .vscode/
 

@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import type { TreeNode } from '../file-tree'
-import type { FileEntry } from '../bridge'
+import type { FileEntry, GitState } from '../bridge'
+import { gitLabels, gitStatusForPath } from '../git-status'
+import ProjectPath from './ProjectPath.vue'
 import { formatBytes } from '../format-bytes'
 
-const props = defineProps<{ node: TreeNode; busy: boolean; side: 'local' | 'remote'; selected: Set<string> }>()
+const props = defineProps<{ node: TreeNode; busy: boolean; side: 'local' | 'remote'; selected: Set<string>; gitStatuses?: Record<string, GitState>; changesView?: boolean; rootPath?: string }>()
 const emit = defineEmits<{
  toggle: [node: TreeNode]
  refresh: [node: TreeNode]
@@ -13,8 +15,10 @@ const emit = defineEmits<{
  open: [file: FileEntry]
 }>()
 
+function status() { return gitStatusForPath(props.gitStatuses, props.node.entry.relativePath) }
+
 function select(event: MouseEvent | KeyboardEvent) {
- if (props.busy || props.node.entry.excluded || props.node.entry.isLink) return
+ if (props.busy || props.node.entry.excluded || props.node.entry.isLink || props.node.entry.missing || (props.changesView && props.node.entry.isDir)) return
  emit('select', props.node.entry, event)
 }
 
@@ -27,12 +31,13 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function open() {
- if (!props.busy && !props.node.entry.isDir && !props.node.entry.isLink && !props.node.entry.excluded) emit('open', props.node.entry)
+ if (!props.busy && !props.node.entry.isDir && !props.node.entry.isLink && !props.node.entry.excluded && !props.node.entry.missing) emit('open', props.node.entry)
 }
 
 function onContextMenu(event: MouseEvent) {
  event.preventDefault()
  event.stopPropagation()
+ if (props.node.entry.missing || (props.changesView && props.node.entry.isDir)) return
  emit('context', props.node.entry, event)
 }
 </script>
@@ -41,8 +46,11 @@ function onContextMenu(event: MouseEvent) {
  <li class="tree-node">
   <div
    class="tree-row"
-   :class="{ excluded: node.entry.excluded, selected: selected.has(node.entry.relativePath) }"
+   :class="{ 'project-root-row': !!rootPath, excluded: node.entry.excluded, selected: selected.has(node.entry.relativePath) }"
    role="treeitem"
+   :data-tree-path="node.entry.relativePath"
+   :data-git-status="status()"
+   :title="status() ? gitLabels[status()!] : undefined"
    :aria-selected="selected.has(node.entry.relativePath)"
    :aria-expanded="node.entry.isDir && !node.entry.isLink ? node.expanded : undefined"
    :tabindex="node.entry.excluded || node.entry.isLink ? -1 : 0"
@@ -62,24 +70,18 @@ function onContextMenu(event: MouseEvent) {
  ><span class="disclosure">{{ node.expanded ? '▾' : '▸' }}</span></button>
    <span v-else class="tree-disclosure-spacer"></span>
    <span class="tree-name"><span class="entry-icon">{{ node.entry.isLink ? '↗' : node.entry.isDir ? '▰' : '▫' }}</span>{{ node.entry.name }}{{ node.entry.isDir ? '/' : '' }}</span>
+   <ProjectPath v-if="rootPath" :path="rootPath" />
+   <span v-if="changesView && status()" class="git-state-label">{{ gitLabels[status()!] }}</span>
    <span v-if="node.entry.excluded" class="excluded-label">исключён</span>
    <span v-else-if="node.entry.searchExcluded" class="excluded-label">исключена из поиска</span>
-   <span v-else-if="!node.entry.isDir && !node.entry.isLink" class="file-size">{{ formatBytes(node.entry.size) }}</span>
-   <button
-    v-if="node.entry.isDir && !node.entry.isLink && node.loaded"
-    class="row-action"
-    type="button"
-    :disabled="busy || node.entry.excluded"
-    :aria-label="`Обновить ${node.entry.name}`"
-    title="Обновить папку"
-    @click.stop="emit('refresh', node)"
-   >⟳</button>
+   <span v-else-if="!changesView && !node.entry.isDir && !node.entry.isLink" class="file-size">{{ formatBytes(node.entry.size) }}</span>
+
   </div>
   <template v-if="node.expanded">
    <p v-if="node.loading" role="status" class="tree-message">Загрузка…</p>
    <div v-if="node.error" class="tree-message error" role="alert"><p>{{ node.error }}</p><p v-if="node.loaded">Показаны данные предыдущего чтения.</p><button type="button" :disabled="busy" @click="emit('refresh', node)">Повторить</button></div>
-   <p v-else-if="node.loaded && !node.children.length && !node.loading" class="tree-message">Папка пуста</p>
-   <ul v-if="node.children.length" class="file-tree"><FileTree v-for="child in node.children" :key="child.entry.relativePath" :node="child" :busy="busy" :side="side" :selected="selected" @toggle="emit('toggle', $event)" @refresh="emit('refresh', $event)" @select="(file, event) => emit('select', file, event)" @context="(file, event) => emit('context', file, event)" @open="emit('open', $event)" /></ul>
+   <p v-else-if="!changesView && node.loaded && !node.children.length && !node.loading" class="tree-message">Папка пуста</p>
+   <ul v-if="node.children.length" class="file-tree"><FileTree v-for="child in node.children" :key="child.entry.relativePath" :node="child" :busy="busy" :side="side" :selected="selected" :git-statuses="gitStatuses" :changes-view="changesView" @toggle="emit('toggle', $event)" @refresh="emit('refresh', $event)" @select="(file, event) => emit('select', file, event)" @context="(file, event) => emit('context', file, event)" @open="emit('open', $event)" /></ul>
   </template>
  </li>
 </template>

@@ -5,10 +5,11 @@ import { compareLines } from '../file-diff'
 import { formatBytes } from '../format-bytes'
 
 const props = defineProps<{ project: Project; busy: boolean; remoteBusy: boolean }>()
-const emit = defineEmits<{ openLocal: [relative: string]; refresh: [side: 'local' | 'remote', relative: string, connectionID: string] }>()
+const emit = defineEmits<{ activeFileChange: [file: FileContent | undefined]; openLocal: [relative: string]; refresh: [side: 'local' | 'remote', relative: string, connectionID: string] }>()
 interface Tab { key: string; file: FileContent }
 const tabs = ref<Tab[]>([]), activeKey = ref('')
 const active = computed(() => tabs.value.find(t => t.key === activeKey.value)?.file)
+watch(active, file => emit('activeFileChange', file))
 const lines = computed(() => (active.value?.text ?? '').replace(/\r\n/g, '\n').split('\n'))
 const visibleLines = computed(() => lines.value.slice(0, 10000))
 const comparison = ref<FileComparison>(), compareDialog = ref<HTMLDialogElement>()

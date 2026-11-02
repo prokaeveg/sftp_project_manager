@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { backend, type AuthPrompt, type BatchPreview, type FileEntry, type NavigationStatus, type Project, type ProjectConnection, type QueueState, type SSHDiscovery, type SSHEffective, type Status } from './bridge'
+import { backend, type AuthPrompt, type BatchPreview, type FileEntry, type FileContent, type NavigationStatus, type PhpStormPreview, type GitSnapshot, type Project, type ProjectConnection, type QueueState, type SSHDiscovery, type SSHEffective, type Status } from './bridge'
 import FileTree from './components/FileTree.vue'
 import ResizableWorkspace from './components/ResizableWorkspace.vue'
 import TransferQueue from './components/TransferQueue.vue'
@@ -8,7 +8,8 @@ import TransferMenu from './components/TransferMenu.vue'
 import FileWorkspace from './components/FileWorkspace.vue'
 import { directorySearchExcluded } from './search-exclusions'
 import { formatBytes } from './format-bytes'
-import { fromDeploymentPath, loadDirectory, selectTreeEntry, toggleDirectory, toMappingPath, treeRoot, type TreeNode } from './file-tree'
+import { gitStatusMap, gitChangesTree } from './git-status'
+import { fromDeploymentPath, loadDirectory, revealTreeEntry, selectTreeEntry, toggleDirectory, toMappingPath, treeRoot, type TreeNode } from './file-tree'
 
 function emptyProject(): Project { return { id: '', name: '', color: '#517bbd', glowSize: 100, localRoot: '', connections: [] } }
 function emptyConnection(): ProjectConnection {
@@ -16,6 +17,38 @@ function emptyConnection(): ProjectConnection {
 }
 const status = ref<Status>(), project = reactive<Project>(emptyProject()), draft = reactive<Project>(emptyProject())
 const error = ref(''), notice = ref(''), busy = ref(false), choosingDirectory = ref(false)
+const phpStormImport = ref<PhpStormPreview>()
+const importServers = ref<string[]>([])
+const importEnabled = ref(false)
+const git = ref<GitSnapshot>({ available: false, files: [] })
+const gitError = ref(''), gitLoading = ref(false), localTab = ref<'project' | 'changes'>('project')
+const gitMode = ref<'list' | 'tree'>('tree')
+const gitStatuses = computed(() => gitStatusMap(git.value.files))
+const changedFiles = computed(() => git.value.files.filter(file => file.status !== 'clean' && file.status !== 'untracked' && file.status !== 'ignored'))
+const unversionedFiles = computed(() => git.value.files.filter(file => file.status === 'untracked'))
+const unversionedStatuses = computed(() => gitStatusMap(unversionedFiles.value))
+const unversionedOpen = ref(false)
+const collapsedGitDirectories = reactive(new Set<string>())
+const changesTree = computed(() => {
+ const root = gitChangesTree(git.value.files, gitMode.value)
+ const apply = (node: TreeNode) => { if (collapsedGitDirectories.has(node.entry.relativePath)) node.expanded = false; node.children.forEach(apply) }
+ apply(root); return root
+})
+const unversionedTree = computed(() => {
+ const root = gitChangesTree(git.value.files, gitMode.value, 'unversioned')
+ const apply = (node: TreeNode) => { if (collapsedGitDirectories.has(node.entry.relativePath)) node.expanded = false; node.children.forEach(apply) }
+ apply(root); return root
+})
+const changesSelectionTree = computed(() => {
+ const root = treeRoot(); root.loaded = true; root.expanded = true
+ root.children = [...changesTree.value.children, ...(unversionedOpen.value ? unversionedTree.value.children : [])]
+ return root
+})
+watch(unversionedOpen, open => {
+ if (!open) for (const file of unversionedFiles.value) selections.local.delete(file.path)
+})
+let gitPollingEnabled = false
+let gitRequest = 0, gitTimer: ReturnType<typeof setTimeout> | undefined
 const preview = ref<BatchPreview>()
 const previewSelectionSide = ref<'local' | 'remote'>()
 const queue = ref<QueueState>({ paused: false, jobs: [] }), queueError = ref(''), queueBusy = ref(false), queuePanelOpen = ref(false)
@@ -42,6 +75,33 @@ const selections = reactive({ local: new Set<string>(), remote: new Set<string>(
 const selectionAnchors: Record<'local' | 'remote', string | null | undefined> = { local: undefined, remote: undefined }
 const transferMenu = ref<{ side: 'local' | 'remote'; x: number; y: number; file?: FileEntry }>()
 const fileWorkspace = ref<InstanceType<typeof FileWorkspace>>()
+const activeFile = ref<FileContent>()
+const revealPath = computed(() => {
+ const file = activeFile.value
+ if (file && file.projectID === project.id) {
+  if (!file.connectionID) return file.relativePath
+  const source = savedProject.value?.connections.find(connection => connection.id === file.connectionID)
+  const mappings = [...(source?.mappings ?? [])].sort((a,b) => b.deploymentPath.length - a.deploymentPath.length)
+  for (const mapping of mappings) {
+   try { return fromDeploymentPath(file.relativePath, mapping.deploymentPath, mapping.localPath) } catch { /* Try the next source mapping. */ }
+  }
+  return undefined
+ }
+ const selected = selections.local.size === 1 ? [...selections.local][0] : undefined
+ return selected && selected !== '.' ? selected : undefined
+})
+async function revealCurrentFile() {
+ const relative = revealPath.value
+ if (!relative || busy.value) return
+ await run(async () => {
+  selectLocalTab('project')
+  const node = await revealTreeEntry(trees.local, relative, path => backend().ListProjectLocal(path))
+  selections.local.clear(); selections.local.add(node.entry.relativePath); selectionAnchors.local = node.entry.relativePath
+  await nextTick()
+  const row = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="local-pane"] [data-tree-path]')).find(element => element.dataset.treePath === node.entry.relativePath)
+  row?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); row?.focus({ preventScroll: true })
+ })
+}
 
 const discovery = ref<SSHDiscovery>(), importedAlias = ref(''), effective = ref<SSHEffective>(), trustConfig = ref(false)
 const projects = computed(() => status.value?.settings.projects ?? [])
@@ -107,6 +167,49 @@ function explainError(errorValue: unknown): string {
  if (message.includes('changed during transfer') || message.includes('metadata differs')) return 'Файл изменился во время передачи. Проверьте источник и назначение.'
  return message
 }
+function pruneChangedSelection() {
+ if (localTab.value !== 'changes') return
+ const selectable = new Set(git.value.files.filter(file => file.status !== 'clean' && file.status !== 'ignored' && file.status !== 'deleted' && !file.isDir).map(file => file.path))
+ for (const path of selections.local) if (!selectable.has(path)) selections.local.delete(path)
+}
+async function refreshGit() {
+ const projectID = project.id
+ if (!projectID || gitLoading.value) return
+ const request = ++gitRequest
+ gitLoading.value = true; gitError.value = ''
+ try {
+  const api = window.go?.main.App
+  if (!api?.GetGitStatus) { git.value = { available: false, message: 'Git-статус доступен в приложении Wails', files: [] }; return }
+  const result = await api.GetGitStatus(projectID)
+  if (request === gitRequest && project.id === projectID) { git.value = result; pruneChangedSelection() }
+ } catch (e) {
+  if (request === gitRequest && project.id === projectID) { git.value = { available: false, files: [] }; gitError.value = String(e) }
+ } finally { if (request === gitRequest) gitLoading.value = false }
+}
+function pollGit() {
+ if (!gitPollingEnabled) return
+ gitTimer = setTimeout(async () => {
+  if (!document.hidden && !busy.value && project.id) await refreshGit()
+  pollGit()
+ }, 5000)
+}
+watch(() => [project.id, project.localRoot], () => {
+ gitRequest++; gitLoading.value = false; git.value = { available: false, files: [] }; gitError.value = ''
+ collapsedGitDirectories.clear(); unversionedOpen.value = false; localTab.value = 'project'; void refreshGit()
+})
+function cycleToolWindow() {
+ selectLocalTab(localTab.value === 'project' ? 'changes' : 'project')
+ nextTick(() => document.getElementById(`${localTab.value}-tab`)?.focus())
+}
+function selectLocalTab(tab: 'project' | 'changes') {
+ localTab.value = tab; selections.local.clear(); selectionAnchors.local = undefined; transferMenu.value = undefined
+ if (tab === 'changes') void refreshGit()
+}
+function toggleChangedDirectory(node: TreeNode) {
+ if (node.expanded) collapsedGitDirectories.add(node.entry.relativePath)
+ else collapsedGitDirectories.delete(node.entry.relativePath)
+}
+watch(gitMode, () => { selections.local.clear(); selectionAnchors.local = undefined; transferMenu.value = undefined })
 async function loadLocalRoot() {
  if (!project.id) return
  trees.local = treeRoot(); trees.local.entry.name = project.name
@@ -127,6 +230,7 @@ async function openSettings() {
 }
 async function beginProject() {
  settingsTrigger.value = document.activeElement as HTMLElement
+ phpStormImport.value = undefined; importServers.value = []; importEnabled.value = false
  replaceProject(draft, emptyProject()); wizard.value = true; settingsOpen.value = true; error.value = ''
  draft.color = '#' + Array.from(crypto.getRandomValues(new Uint8Array(3)), value => (80 + value % 128).toString(16)).join('')
  await nextTick(); settingsDialog.value?.showModal()
@@ -137,6 +241,8 @@ function closeSettings(discard = true) {
  nextTick(() => settingsTrigger.value?.focus())
 }
 function onSettingsClose() {
+ // A queued close event may arrive after the same dialog has been reopened.
+ if (settingsDialog.value?.open) return
  if (settingsOpen.value) { refreshDraftFromProject(); settingsOpen.value = false; wizard.value = false; nextTick(() => settingsTrigger.value?.focus()) }
 }
 function cancelSettings(event: Event) { if (busy.value) { event.preventDefault(); return }; closeSettings() }
@@ -160,12 +266,32 @@ async function chooseLocalDirectory() {
  try { await run(async () => { const selected = await backend().SelectLocalDirectory(draft.localRoot); if (selected) draft.localRoot = selected }) }
  finally { choosingDirectory.value = false }
 }
+watch(() => draft.localRoot, () => { phpStormImport.value = undefined; importServers.value = [] })
+watch(importEnabled, () => { phpStormImport.value = undefined; importServers.value = [] })
+async function previewPhpStormImport() {
+ await run(async () => {
+  phpStormImport.value = undefined; importServers.value = []
+  const sourceRoot = draft.localRoot
+  const result = await backend().PreviewPhpStormProject(sourceRoot)
+  if (!settingsOpen.value || !wizard.value || draft.localRoot !== sourceRoot) return
+  draft.localRoot = result.project.localRoot
+  if (!draft.name.trim()) draft.name = result.project.name
+  await nextTick()
+  phpStormImport.value = result
+  importServers.value = result.project.connections.filter(c => !result.aliasConnectionIDs.includes(c.id)).map(c => c.id)
+ })
+}
 async function saveProject() {
  await run(async () => {
   const payload = copy(draft)
+  if (wizard.value && importEnabled.value) {
+   if (!phpStormImport.value || phpStormImport.value.project.localRoot !== draft.localRoot) throw new Error('Сначала прочитайте настройки выбранного проекта PhpStorm.')
+   payload.connections = copy(phpStormImport.value.project.connections.filter(c => importServers.value.includes(c.id)))
+   payload.defaultConnectionID = payload.connections.some(c => c.id === phpStormImport.value?.project.defaultConnectionID) ? phpStormImport.value.project.defaultConnectionID : undefined
+  }
   for (const connection of payload.connections) connection.excludes = (connection.excludes ?? []).filter(Boolean)
   if (!payload.defaultConnectionID && payload.connections.length) payload.defaultConnectionID = payload.connections[0].id
-  status.value = await backend().SaveProject(payload)
+  status.value = wizard.value && importEnabled.value ? await backend().CreateImportedProject(payload) : await backend().SaveProject(payload)
   navigationRevision++; setNavigationDisconnected()
   replaceProject(project, projects.value.find(p => p.id === status.value?.settings.activeProjectID) ?? payload)
   resetTrees(); nameRemoteRoot(); closeSettings(false); await loadLocalRoot()
@@ -260,6 +386,10 @@ async function selectProfile(projectID: string, connectionID: string, mappingID:
   await syncNavigationStatus()
  })
 }
+async function refreshLocalPanel() {
+ if (localTab.value === 'project') await refreshLocal()
+ await refreshGit()
+}
 async function refreshLocal() {
  if (!project.id) return
  await run(async () => { selections.local.clear(); selectionAnchors.local = undefined; closePreview(); await loadDirectory(trees.local, path => backend().ListProjectLocal(path)) })
@@ -305,18 +435,41 @@ async function treeAction(side: 'local' | 'remote', node: TreeNode, refresh = fa
 }
 function selectFile(side: 'local' | 'remote', file: FileEntry, event: MouseEvent | KeyboardEvent) {
  transferMenu.value = undefined
- selectionAnchors[side] = selectTreeEntry(selections[side], trees[side], file, event, selectionAnchors[side])
+ selectionAnchors[side] = selectTreeEntry(selections[side], side === 'local' && localTab.value === 'changes' ? changesSelectionTree.value : trees[side], file, event, selectionAnchors[side])
+ if (side === 'local') pruneChangedSelection()
  preview.value = undefined
 }
 function openTransferMenu(side: 'local' | 'remote', event: MouseEvent, file?: FileEntry) {
- const searchDirectory = side === 'local' && file?.isDir && file.relativePath !== '.' && !file.isLink
- if (busy.value || queueRunning.value || (file?.excluded && !searchDirectory) || file?.isLink) return
+ if (file?.missing) return
+ if (busy.value || queueRunning.value) return
+ if (file && (file.excluded || file.isLink)) { preview.value = undefined; transferMenu.value = { side, x: event.clientX, y: event.clientY, file }; return }
  if (file && !selections[side].has(file.relativePath)) {
   selections[side].clear(); selections[side].add(file.relativePath); selectionAnchors[side] = file.relativePath
  }
  if (!selections[side].size) return
  preview.value = undefined
  transferMenu.value = { side, x: event.clientX, y: event.clientY, file }
+}
+async function copySelectedPaths(kind: 'local' | 'project' | 'server', targetID = '') {
+ const menu = transferMenu.value; transferMenu.value = undefined
+ if (!menu || busy.value) return
+ const paths = menu.file && !selections[menu.side].has(menu.file.relativePath) ? [menu.file.relativePath] : [...selections[menu.side]]
+ const sourceID = menu.side === 'remote' ? savedConnection.value?.id ?? '' : ''
+ await run(async () => {
+  await backend().CopyPaths(project.id, menu.side, sourceID, targetID, paths, kind)
+  notice.value = paths.length === 1 ? 'Путь скопирован.' : `Скопировано путей: ${paths.length}.`
+ })
+}
+async function refreshContextDirectory() {
+ const menu = transferMenu.value; transferMenu.value = undefined
+ if (!menu?.file?.isDir || menu.file.isLink || menu.file.excluded) return
+ const find = (node: TreeNode): TreeNode | undefined => {
+  if (node.entry.relativePath === menu.file!.relativePath) return node
+  for (const child of node.children) { const found = find(child); if (found) return found }
+ }
+ const node = find(trees[menu.side])
+ if (node) await treeAction(menu.side, node, true)
+ if (menu.side === 'local') void refreshGit()
 }
 async function setDirectorySearchExcluded(excluded: boolean) {
  const file = transferMenu.value?.file; transferMenu.value = undefined
@@ -346,7 +499,7 @@ async function refreshFile(side: 'local' | 'remote', relative: string, connectio
 }
 async function compareSelected(connectionID: string) {
  const menu = transferMenu.value; transferMenu.value = undefined
- if (!menu?.file || menu.file.isDir || busy.value || queueRunning.value) return
+ if (!menu?.file || menu.file.isDir || selections[menu.side].size !== 1 || busy.value || queueRunning.value) return
  let relative: string
  try { relative = projectSelectionPaths(menu.side)[0]! } catch (e) { error.value = explainError(e); return }
  await run(async () => { await fileWorkspace.value?.compareFile(relative, connectionID) })
@@ -500,6 +653,7 @@ watch(() => authPrompt.value?.id, async id => {
 
 watch([busy, queueRunning, savedConnection, savedProject], () => { transferMenu.value = undefined })
 onMounted(async () => {
+ gitPollingEnabled = true; pollGit()
  queuePollingEnabled = true
  authPollingEnabled = true
  void pollQueue()
@@ -511,7 +665,7 @@ onMounted(async () => {
   replaceProject(project, active); refreshDraftFromProject(); nameRemoteRoot(); await loadLocalRoot()
  })
 })
-onUnmounted(() => { queuePollingEnabled = false; authPollingEnabled = false; authPollRevision++; authAnswer.value = ''; authRemember.value = false; if (queuePollTimer) clearTimeout(queuePollTimer); if (authPollTimer) clearTimeout(authPollTimer) })
+onUnmounted(() => { gitPollingEnabled = false; gitRequest++; if (gitTimer) clearTimeout(gitTimer); queuePollingEnabled = false; authPollingEnabled = false; authPollRevision++; authAnswer.value = ''; authRemember.value = false; if (queuePollTimer) clearTimeout(queuePollTimer); if (authPollTimer) clearTimeout(authPollTimer) })
 </script>
 
 <template>
@@ -525,15 +679,39 @@ onUnmounted(() => { queuePollingEnabled = false; authPollingEnabled = false; aut
   </header>
   <div v-if="error && !settingsOpen && !wizard && !preview" class="toast error" role="alert">{{ error }}<button aria-label="Закрыть ошибку" @click="error = ''">×</button></div>
   <div v-if="notice" class="toast" role="status">{{ notice }}<button aria-label="Закрыть сообщение" @click="notice = ''">×</button></div>
-  <ResizableWorkspace v-if="status && project.id">
+  <div v-if="status && project.id" class="workspace-shell">
+   <nav class="tool-window-bar" role="tablist" aria-label="Панели проекта" aria-orientation="vertical" data-testid="tool-window-bar" @keydown.down.prevent="cycleToolWindow" @keydown.up.prevent="cycleToolWindow">
+    <button id="project-tab" class="tool-window-button" role="tab" :aria-selected="localTab === 'project'" :tabindex="localTab === 'project' ? 0 : -1" aria-controls="project-files-panel" aria-label="Проект" title="Проект" data-testid="project-tab" @click="selectLocalTab('project')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><rect x="3.5" y="4" width="17" height="12.5" rx="1.5"/><path d="M9 20h6M12 16.5V20M2 20h20"/></svg></button>
+    <button id="changes-tab" class="tool-window-button" role="tab" :aria-selected="localTab === 'changes'" :tabindex="localTab === 'changes' ? 0 : -1" aria-controls="git-changes-panel" aria-label="Изменения Git" :title="`Изменения Git${git.available ? ' · ' + changedFiles.length : ''}`" data-testid="changes-tab" @click="selectLocalTab('changes')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="7" cy="5" r="2.3"/><circle cx="7" cy="19" r="2.3"/><circle cx="17" cy="5" r="2.3"/><path d="M7 7.5v9M17 7.5v2c0 3-2 4-5 4H7"/></svg><span v-if="git.available && changedFiles.length" class="tool-window-badge">{{ changedFiles.length }}</span></button>
+   </nav>
+  <ResizableWorkspace>
    <template #left>
    <section class="pane local-pane" data-testid="local-pane">
-    <header class="pane-header"><div><h1>Проект</h1><div class="root-path" :title="project.localRoot">{{ project.localRoot }}</div></div><button class="icon-button" title="Обновить дерево проекта" aria-label="Обновить дерево проекта" :disabled="busy" @click="refreshLocal">⟳</button></header>
-    <div class="tree-toolbar"><span>{{ selections.local.size }} выбрано</span><span class="toolbar-spacer"></span><button class="link-button" :disabled="busy || !selections.local.size" @click="clearSelection('local')">Снять выбор</button><button class="primary small" :disabled="busy || queueRunning || !selections.local.size || !savedConnection" @click="transferSelection('local', 'upload')">Загрузить на {{ quickConnection?.name ?? 'сервер' }}</button><button v-if="(savedProject?.connections.length ?? 0) > 1" class="quiet small transfer-server-button" :disabled="busy || queueRunning || !selections.local.size" @click="openTransferMenu('local', $event)">Загрузить на… ▸</button></div>
-    <div class="tree-scroll"><p v-if="trees.local.loading && !trees.local.loaded" class="empty-state">Загрузка файлов проекта…</p><p v-else-if="trees.local.error && !trees.local.children.length" class="empty-state" role="alert">{{ trees.local.error }} <button @click="refreshLocal">Повторить</button></p><ul class="file-tree tree-root"><FileTree :node="trees.local" :busy="busy" side="local" :selected="selections.local" @toggle="treeAction('local', $event)" @refresh="treeAction('local', $event, true)" @select="(file, event) => selectFile('local', file, event)" @context="(file, event) => openTransferMenu('local', event, file)" @open="openFile('local', $event.relativePath)" /></ul></div>
+    <header class="pane-header local-pane-heading"><h1>{{ localTab === 'project' ? 'Проект' : 'Изменения Git' }}</h1></header>
+    <div class="local-actions-slot"><div class="local-actions" role="toolbar" aria-label="Действия с файлами проекта" data-testid="local-actions">
+     <div class="local-upload-actions"><button class="primary small local-upload" data-testid="local-upload" :title="`Загрузить на ${quickConnection?.name ?? 'сервер по умолчанию'}`" :aria-label="`Загрузить на ${quickConnection?.name ?? 'сервер по умолчанию'}`" :disabled="busy || queueRunning || !selections.local.size || !savedConnection" @click="transferSelection('local', 'upload')">Загрузить на {{ quickConnection?.name ?? 'сервер' }}</button><button v-if="(savedProject?.connections.length ?? 0) > 1" class="quiet small transfer-server-button" title="Выбрать сервер для загрузки" aria-label="Выбрать сервер для загрузки" :disabled="busy || queueRunning || !selections.local.size" @click="openTransferMenu('local', $event)">▾</button></div>
+     <button class="link-button local-clear" data-testid="local-clear-selection" :disabled="busy || !selections.local.size" @click="clearSelection('local')">Снять выбор</button>
+     <button class="icon-button local-refresh" data-testid="refresh-local-git" :title="localTab === 'changes' ? 'Обновить Git-статус' : 'Обновить файлы и Git-статус'" :aria-label="localTab === 'changes' ? 'Обновить Git-статус' : 'Обновить файлы и Git-статус'" :disabled="busy || gitLoading" @click="refreshLocalPanel">⟳</button>
+     <button class="icon-button reveal-file-button" data-testid="reveal-file" title="Показать открытый файл в дереве проекта" aria-label="Показать файл в дереве проекта" :disabled="busy || !revealPath" @click="revealCurrentFile"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="12" r="5"/><path d="M12 2v6m0 8v6M2 12h6m8 0h6"/></svg></button>
+    </div></div>
+    <div v-show="localTab === 'project'" id="project-files-panel" role="tabpanel" aria-labelledby="project-tab" class="tree-scroll"><p v-if="trees.local.loading && !trees.local.loaded" class="empty-state">Загрузка файлов проекта…</p><p v-else-if="trees.local.error && !trees.local.children.length" class="empty-state" role="alert">{{ trees.local.error }} <button @click="refreshLocal">Повторить</button></p><ul class="file-tree tree-root"><FileTree :root-path="project.localRoot" :node="trees.local" :busy="busy" :git-statuses="git.available ? gitStatuses : undefined" side="local" :selected="selections.local" @toggle="treeAction('local', $event)" @refresh="treeAction('local', $event, true)" @select="(file, event) => selectFile('local', file, event)" @context="(file, event) => openTransferMenu('local', event, file)" @open="openFile('local', $event.relativePath)" /></ul></div>
+    <div v-if="localTab === 'changes'" id="git-changes-panel" role="tabpanel" aria-labelledby="changes-tab" class="git-panel">
+     <div class="git-view-toolbar"><span>{{ changedFiles.length }} файлов</span><div role="group" aria-label="Отображение изменений"><button data-testid="git-view-list" :aria-pressed="gitMode === 'list'" @click="gitMode = 'list'">Список</button><button data-testid="git-view-tree" :aria-pressed="gitMode === 'tree'" @click="gitMode = 'tree'">Дерево</button></div></div>
+     <p v-if="gitError" class="empty-state error" role="alert">{{ gitError }} <button :disabled="gitLoading" @click="refreshGit">Повторить</button></p>
+     <p v-else-if="!git.available && !gitLoading" class="empty-state">{{ git.message || 'Git-репозиторий не найден' }}</p>
+     <p v-else-if="git.available && !changedFiles.length" class="empty-state" data-testid="git-clean">Нет изменений в отслеживаемых файлах</p>
+     <div v-if="git.available" class="tree-scroll git-sections">
+     <div v-if="changedFiles.length" data-testid="git-changes"><ul class="file-tree"><FileTree v-for="node in changesTree.children" :key="node.entry.relativePath" :node="node" :busy="busy" side="local" :selected="selections.local" :git-statuses="gitStatuses" changes-view @toggle="toggleChangedDirectory" @select="(file, event) => selectFile('local', file, event)" @context="(file, event) => openTransferMenu('local', event, file)" @open="openFile('local', $event.relativePath)" /></ul></div>
+     <details class="unversioned-group" data-testid="git-unversioned" :open="unversionedOpen" @toggle="unversionedOpen = ($event.target as HTMLDetailsElement).open">
+      <summary>Unversioned files <span>{{ unversionedFiles.length }}</span></summary>
+      <p v-if="!unversionedFiles.length" class="tree-message">Нет неотслеживаемых файлов</p>
+      <ul v-else class="file-tree" data-testid="git-unversioned-files"><FileTree v-for="node in unversionedTree.children" :key="node.entry.relativePath" :node="node" :busy="busy" side="local" :selected="selections.local" :git-statuses="unversionedStatuses" changes-view @toggle="toggleChangedDirectory" @select="(file, event) => selectFile('local', file, event)" @context="(file, event) => openTransferMenu('local', event, file)" @open="openFile('local', $event.relativePath)" /></ul>
+     </details>
+     </div>
+    </div>
    </section>
    </template>
-   <FileWorkspace ref="fileWorkspace" :project="project" :busy="busy" :remote-busy="queueRunning" @open-local="openFile('local', $event)" @refresh="refreshFile" />
+   <FileWorkspace @active-file-change="activeFile = $event" ref="fileWorkspace" :project="project" :busy="busy" :remote-busy="queueRunning" @open-local="openFile('local', $event)" @refresh="refreshFile" />
    <template #right>
    <section class="pane remote-pane" data-testid="remote-pane">
     <header class="pane-header remote-header"><div><h1>Сервер</h1><div class="root-path" :title="savedConnection?.rootPath || 'Сервер не выбран'">{{ savedConnection?.rootPath || 'Сервер не выбран' }}</div></div>
@@ -554,11 +732,16 @@ onUnmounted(() => { queuePollingEnabled = false; authPollingEnabled = false; aut
    </section>
    </template>
   </ResizableWorkspace>
-  <TransferMenu v-if="transferMenu" :x="transferMenu.x" :y="transferMenu.y" :connections="savedProject?.connections ?? []" :current-id="quickConnection?.id" :can-exclude-directory="transferMenu.side === 'local' && !!transferMenu.file?.isDir && transferMenu.file.relativePath !== '.'" :search-excluded="transferMenu.file?.searchExcluded" @exclude-directory="setDirectorySearchExcluded" :can-compare="!!transferMenu.file && !transferMenu.file.isDir && selections[transferMenu.side].size === 1" @compare="compareSelected" @close="transferMenu = undefined" @transfer="(direction, id) => transferSelection(transferMenu!.side, direction, id)" />
+  </div>
+  <TransferMenu can-copy :can-transfer="!transferMenu?.file?.excluded && !transferMenu?.file?.isLink" :copy-connection-id="transferMenu?.side === 'remote' ? savedConnection?.id : quickConnection?.id" @copy-path="copySelectedPaths" :can-refresh-directory="!!transferMenu?.file?.isDir && !transferMenu.file.excluded && !transferMenu.file.isLink" @refresh-directory="refreshContextDirectory" v-if="transferMenu" :x="transferMenu.x" :y="transferMenu.y" :connections="savedProject?.connections ?? []" :current-id="quickConnection?.id" :can-exclude-directory="transferMenu.side === 'local' && !transferMenu.file?.isLink && !!transferMenu.file?.isDir && transferMenu.file.relativePath !== '.'" :search-excluded="transferMenu.file?.searchExcluded" @exclude-directory="setDirectorySearchExcluded" :can-compare="!!transferMenu.file && !transferMenu.file.excluded && !transferMenu.file.isLink && !transferMenu.file.isDir && selections[transferMenu.side].size === 1" @compare="compareSelected" @close="transferMenu = undefined" @transfer="(direction, id) => transferSelection(transferMenu!.side, direction, id)" />
   <TransferQueue v-if="queuePanelOpen" data-testid="queue-panel" :queue="queue" :error="queueError" :busy="queueBusy" :app-busy="busy" @pause="pauseQueue" @cancel="cancelQueueJob" @clear="clearFinishedQueue" @retry="retryQueueJob" />
 
   <dialog ref="settingsDialog" data-testid="settings-dialog" class="modal settings-modal" :class="{ 'wizard-modal': wizard }" @close="onSettingsClose" @cancel="cancelSettings">
-   <form v-if="wizard" class="modal-content" @submit.prevent="saveProject"><p v-if="error" role="alert" class="error">{{ error }}</p><header class="modal-header"><div><span class="eyebrow">ПЕРВЫЙ ЗАПУСК</span><h2>Создать проект</h2></div></header><p class="modal-intro">Укажите название и локальную папку. Серверы можно добавить позже.</p><label>Название проекта<input v-model="draft.name" data-testid="project-name" maxlength="120" required autofocus placeholder="Моё приложение"></label><label class="project-color-field">Цвет проекта<input v-model="draft.color" type="color" data-testid="project-color"></label><label class="project-glow-field">Размер свечения <output>{{ draft.glowSize ?? 100 }}%</output><input v-model.number="draft.glowSize" type="range" min="25" max="150" step="5" data-testid="project-glow-size"></label><label>Папка проекта<div class="directory-picker"><input v-model="draft.localRoot" data-testid="project-folder" required placeholder="C:\Projects\app"><button type="button" data-testid="project-folder-picker" class="quiet" :disabled="busy" @click="chooseLocalDirectory">Обзор…</button></div></label><footer class="modal-actions"><button v-if="busy" type="button" class="cancel-button" @click="cancel">Отменить операцию</button><button class="primary" data-testid="project-save" :disabled="busy">Создать проект</button></footer></form>
+   <form v-if="wizard" class="modal-content" @submit.prevent="saveProject"><p v-if="error" role="alert" class="error">{{ error }}</p><header class="modal-header"><div><span class="eyebrow">НОВЫЙ ПРОЕКТ</span><h2>Создать проект</h2></div></header><p class="modal-intro">Укажите название и локальную папку. Серверы можно добавить позже.</p><label>Название проекта<input v-model="draft.name" data-testid="project-name" maxlength="120" required autofocus placeholder="Моё приложение"></label><label class="project-color-field">Цвет проекта<input v-model="draft.color" type="color" data-testid="project-color"></label><label class="project-glow-field">Размер свечения <output>{{ draft.glowSize ?? 100 }}%</output><input v-model.number="draft.glowSize" type="range" min="25" max="150" step="5" data-testid="project-glow-size"></label><label>Папка проекта<div class="directory-picker"><input v-model="draft.localRoot" data-testid="project-folder" :disabled="busy" required placeholder="C:\Projects\app"><button type="button" data-testid="project-folder-picker" class="quiet" :disabled="busy" @click="chooseLocalDirectory">Обзор…</button></div></label><section class="phpstorm-import"><label class="check-row"><input v-model="importEnabled" type="checkbox" :disabled="busy" data-testid="phpstorm-enable">Импортировать настройки одного проекта PhpStorm</label>
+ <template v-if="importEnabled"><p class="hint">Укажите папку самого проекта с .idea. Другие проекты не просматриваются. Настройки сохранятся только после нажатия «Создать проект».</p><button type="button" class="quiet" data-testid="phpstorm-preview" :disabled="busy || !draft.localRoot.trim()" @click="previewPhpStormImport">Прочитать настройки PhpStorm</button>
+ <div v-if="phpStormImport" class="import-preview" data-testid="phpstorm-result"><h3>Найденные серверы: {{ phpStormImport.project.connections.length }}</h3><p class="hint">Выберите серверы для импорта. Подключение к ним не выполняется.</p>
+ <div v-for="server in phpStormImport.project.connections" :key="server.id" class="import-server"><label class="check-row"><input v-model="importServers" :value="server.id" type="checkbox" :disabled="busy">{{ server.name }}</label><p>{{ server.connection.mode === 'ssh_alias' ? 'SSH-алиас: ' + server.connection.alias : server.connection.user + '@' + server.connection.host + ':' + server.connection.port }} · Корень: {{ server.rootPath }}</p><p v-if="phpStormImport.aliasConnectionIDs.includes(server.id)" class="hint">Выбор этого сервера подтверждает использование указанного SSH-алиаса из вашего доверенного OpenSSH config.</p><ul><li v-for="mapping in server.mappings" :key="mapping.id">{{ mapping.localPath }} → {{ mapping.deploymentPath }}</li></ul><p v-if="!server.mappings.length" class="hint">Маппингов нет — добавьте их в настройках перед передачей.</p></div>
+ <ul class="hint" role="status"><li v-for="warning in phpStormImport.warnings" :key="warning">{{ warning }}</li></ul></div></template></section><footer class="modal-actions"><button type="button" class="quiet" :disabled="busy" @click="closeSettings()">Отмена</button><button class="primary" data-testid="project-save" :disabled="busy || (importEnabled && !phpStormImport)">Создать проект</button></footer></form>
    <form v-else class="modal-content settings-content" @submit.prevent="saveProject"><p v-if="error" role="alert" class="error">{{ error }}</p><header class="modal-header"><div><span class="eyebrow">НАСТРОЙКИ ПРОЕКТА</span><h2>{{ draft.name || 'Новый проект' }}</h2></div><button type="button" class="icon-button" aria-label="Закрыть настройки" :disabled="busy" @click="closeSettings()">×</button></header><div class="settings-layout"><nav class="settings-nav"><button type="button" class="nav-active">Общие</button><button type="button" @click="scrollToServers">Серверы и маппинги</button></nav><div class="settings-fields" id="server-settings"><section class="settings-section"><h3>Проект</h3><label>Название проекта<input v-model="draft.name" maxlength="120" required></label><label class="project-color-field">Цвет проекта<input v-model="draft.color" type="color" data-testid="project-color"></label><label class="project-glow-field">Размер свечения <output>{{ draft.glowSize ?? 100 }}%</output><input v-model.number="draft.glowSize" type="range" min="25" max="150" step="5" data-testid="project-glow-size"></label><label>Локальная папка проекта<div class="directory-picker"><input v-model="draft.localRoot" required><button type="button" class="quiet" :disabled="busy" @click="chooseLocalDirectory">Обзор…</button></div></label></section>
     <section class="settings-section"><div class="section-title"><div><h3>Серверы</h3><p>Подключение выполняется только вручную.</p></div><button type="button" data-testid="settings-add-server" class="quiet" :disabled="busy" @click="addConnection">＋ Добавить сервер</button></div><p v-if="!draft.connections.length" class="settings-empty">Серверов пока нет. Добавьте SSH- или SFTP-подключение, когда оно понадобится.</p>
      <div v-else class="server-editor"><aside class="server-list"><button v-for="(connection, index) in draft.connections" :key="connection.id" type="button" :class="{ chosen: editConnection === index }" @click="editConnection = index; editMapping = 0"><span>{{ connection.name || 'Без имени' }}</span><small>{{ connection.connection.mode === 'ssh_alias' ? (connection.connection.alias || 'SSH-алиас') : (connection.connection.host || 'Ручная настройка') }}</small></button></aside>
