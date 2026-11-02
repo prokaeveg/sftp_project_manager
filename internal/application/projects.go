@@ -281,7 +281,7 @@ func cloneProject(p config.Project) config.Project {
 	out.Connections = make([]config.ProjectConnection, len(p.Connections))
 	for i, c := range p.Connections {
 		out.Connections[i] = c
-		out.Connections[i].Mappings = append([]config.Mapping(nil), c.Mappings...)
+		out.Connections[i].Mappings = append([]config.Mapping{}, c.Mappings...)
 		out.Connections[i].Excludes = append([]string(nil), c.Excludes...)
 	}
 	return out

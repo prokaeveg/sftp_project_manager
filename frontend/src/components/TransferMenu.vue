@@ -1,18 +1,22 @@
 ﻿<script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import ContextSubmenu from './ContextSubmenu.vue'
 import type { ProjectConnection } from '../bridge'
-const props = defineProps<{ x: number; y: number; connections: ProjectConnection[]; currentId?: string; canCopy?: boolean; canTransfer?: boolean; copyConnectionId?: string; canCompare?: boolean; canCompareGit?: boolean; recentGit?: string[]; canRefreshDirectory?: boolean; canExcludeDirectory?: boolean; searchExcluded?: boolean }>()
+const props = defineProps<{ x: number; y: number; connections: ProjectConnection[]; actionConnections: ProjectConnection[]; copyConnections: ProjectConnection[]; currentId?: string; canCopy?: boolean; canTransfer?: boolean; copyConnectionId?: string; canCompare?: boolean; canCompareGit?: boolean; recentGit?: string[]; canRefreshDirectory?: boolean; canExcludeDirectory?: boolean; searchExcluded?: boolean }>()
 const emit = defineEmits<{ copyPath: [kind: 'local' | 'project' | 'server', connectionID?: string]; close: []; refreshDirectory: []; transfer: [direction: 'upload' | 'download', connectionID: string]; compare: [connectionID: string]; compareGit: [ref?: string]; excludeDirectory: [excluded: boolean] }>()
 const menu = ref<HTMLElement>(), submenu = ref<'upload' | 'download' | 'compare' | 'copy' | 'git'>()
 const left = ref(0), top = ref(0)
-const current = computed(() => props.connections.find(c => c.id === props.currentId))
-const copyServer = computed(() => props.connections.find(c => c.id === props.copyConnectionId) ?? current.value)
-function choose(direction: 'upload' | 'download', id?: string) { if (id && props.canTransfer !== false) emit('transfer', direction, id) }
+const current = computed(() => props.actionConnections.find(c => c.id === props.currentId) ?? props.actionConnections[0])
+const copyServer = computed(() => props.copyConnections.find(c => c.id === props.copyConnectionId) ?? props.copyConnections.find(c => c.id === props.currentId) ?? props.copyConnections[0])
+function choose(direction: 'upload' | 'download', id?: string) { if (id && props.actionConnections.some(c => c.id === id) && props.canTransfer !== false) emit('transfer', direction, id) }
 function outside(event: Event) {
  // A closed settings dialog can deliver a queued scroll event after its
  // layout changes. It must not dismiss a newly opened tree context menu.
  if (event.type === 'scroll' && (event.target as Element)?.closest?.('dialog:not([open])')) return
- if (!menu.value?.contains(event.target as Node)) emit('close')
+ if (!menu.value?.contains(event.target as Node) && !(event.target as Element)?.closest?.('[data-context-submenu]')) emit('close')
+}
+function hoverMenu(event: MouseEvent) {
+ if (!(event.target as Element).closest('.context-submenu')) submenu.value = undefined
 }
 function key(event: KeyboardEvent) {
  if (event.key === 'Escape') { event.preventDefault(); emit('close'); return }
@@ -34,7 +38,7 @@ onUnmounted(() => { document.removeEventListener('pointerdown', outside); window
 </script>
 <template>
  <Teleport to="body">
-  <div ref="menu" data-testid="transfer-menu" class="transfer-menu" role="menu" aria-label="Действия с выделенными файлами" :style="{ left: `${left}px`, top: `${top}px`, maxHeight: `calc(100vh - ${top + 8}px)` }" @keydown="key" @contextmenu.prevent>
+  <div ref="menu" data-testid="transfer-menu" class="transfer-menu" role="menu" aria-label="Действия с выделенными файлами" :style="{ left: `${left}px`, top: `${top}px`, maxHeight: `calc(100vh - ${top + 8}px)` }" @keydown="key" @mouseover="hoverMenu" @scroll="submenu = undefined" @contextmenu.prevent>
    <template v-if="canRefreshDirectory">
     <button role="menuitem" data-testid="menu-refresh-directory" @click="emit('refreshDirectory')">Обновить папку</button>
     <div class="menu-divider"></div>
@@ -43,43 +47,40 @@ onUnmounted(() => { document.removeEventListener('pointerdown', outside); window
     <button role="menuitem" data-testid="menu-search-exclude" @click="emit('excludeDirectory', !searchExcluded)">{{ searchExcluded ? 'Unmark directory excluded' : 'Mark directory excluded' }}</button>
     <div class="menu-divider"></div>
    </template>
-   <button role="menuitem" data-testid="menu-upload" :disabled="!current || canTransfer === false" @click="choose('upload', current?.id)">Загрузить на {{ current?.name ?? 'сервер' }}</button>
-   <button role="menuitem" data-testid="menu-download" :disabled="!current || canTransfer === false" @click="choose('download', current?.id)">Скачать с {{ current?.name ?? 'сервера' }}</button>
+   <button role="menuitem" v-if="current" data-testid="menu-upload" :disabled="!current || canTransfer === false" @click="choose('upload', current?.id)">Загрузить на {{ current?.name ?? 'сервер' }}</button>
+   <button role="menuitem" v-if="current" data-testid="menu-download" :disabled="!current || canTransfer === false" @click="choose('download', current?.id)">Скачать с {{ current?.name ?? 'сервера' }}</button>
    <template v-if="canCopy">
     <div class="menu-divider"></div>
     <button role="menuitem" data-testid="menu-copy-local" @click="emit('copyPath', 'local')">Копировать полный локальный путь</button>
     <button role="menuitem" data-testid="menu-copy-project" @click="emit('copyPath', 'project')">Копировать путь относительно проекта</button>
-    <button role="menuitem" data-testid="menu-copy-server" :disabled="!copyServer" @click="copyServer && emit('copyPath', 'server', copyServer.id)">Копировать путь на {{ copyServer?.name ?? 'сервере' }}</button>
-    <template v-if="connections.length > 1">
-     <button role="menuitem" data-testid="menu-copy-servers" aria-haspopup="menu" :aria-expanded="submenu === 'copy'" @mouseenter="submenu = 'copy'" @click="submenu = submenu === 'copy' ? undefined : 'copy'">Копировать путь на сервере… <span>▸</span></button>
-     <div v-if="submenu === 'copy'" class="server-submenu" role="menu" aria-label="Сервер для копирования пути"><button v-for="connection in connections" :key="connection.id" role="menuitem" :data-copy-server-id="connection.id" @click="emit('copyPath', 'server', connection.id)">{{ connection.name }}<span v-if="connection.id === copyServer?.id">✓</span></button></div>
+    <button role="menuitem" v-if="copyServer" data-testid="menu-copy-server" :disabled="!copyServer" @click="copyServer && emit('copyPath', 'server', copyServer.id)">Копировать путь на {{ copyServer?.name ?? 'сервере' }}</button>
+    <template v-if="copyConnections.length">
+     <ContextSubmenu label="Копировать путь на сервере…" test-id="menu-copy-servers" :open="submenu === 'copy'" @open="submenu = 'copy'" @close="submenu === 'copy' && (submenu = undefined)" @dismiss="close"><button v-for="connection in copyConnections" :key="connection.id" role="menuitem" :data-copy-server-id="connection.id" @click="emit('copyPath', 'server', connection.id)">{{ connection.name }}<span v-if="connection.id === copyServer?.id">✓</span></button></ContextSubmenu>
     </template>
    </template>
    <template v-if="canCompareGit">
     <div class="menu-divider"></div>
-    <button role="menuitem" data-testid="menu-compare-git" aria-haspopup="menu" :aria-expanded="submenu === 'git'" @mouseenter="submenu = 'git'" @click="submenu = submenu === 'git' ? undefined : 'git'">Сравнить с Git <span>▸</span></button>
-    <div v-if="submenu === 'git'" class="server-submenu" role="menu" aria-label="Сравнить с Git">
+    <ContextSubmenu label="Сравнить с Git" test-id="menu-compare-git" :open="submenu === 'git'" @open="submenu = 'git'" @close="submenu === 'git' && (submenu = undefined)" @dismiss="close">
      <button v-for="ref in recentGit" :key="ref" role="menuitem" @click="emit('compareGit', ref)">{{ ref.replace(/^refs\/(heads|remotes)\//, '') }}</button>
      <button role="menuitem" data-testid="menu-select-git-branch" @click="emit('compareGit')">Выбрать ветку…</button>
-    </div>
+    </ContextSubmenu>
    </template>
-   <template v-if="canCompare">
+   <template v-if="canCompare && actionConnections.length">
     <div class="menu-divider"></div>
     <button role="menuitem" data-testid="menu-compare-default" :disabled="!current" @click="current && emit('compare', current.id)">Сравнить с сервером {{ current?.name ?? 'по умолчанию' }}</button>
-    <template v-if="connections.length > 1">
-     <button role="menuitem" data-testid="menu-compare-servers" aria-haspopup="menu" :aria-expanded="submenu === 'compare'" @click="submenu = submenu === 'compare' ? undefined : 'compare'" @mouseenter="submenu = 'compare'">Сравнить с <span aria-hidden="true">▸</span></button>
-     <div v-if="submenu === 'compare'" role="menu" class="server-submenu" aria-label="Сравнить с сервером"><button v-for="connection in connections" :key="connection.id" role="menuitem" :data-compare-server-id="connection.id" @click="emit('compare', connection.id)">{{ connection.name }}<span v-if="connection.id === currentId" aria-label="Сервер по умолчанию">✓</span></button></div>
+    <template v-if="actionConnections.length">
+     <ContextSubmenu label="Сравнить с" test-id="menu-compare-servers" :open="submenu === 'compare'" @open="submenu = 'compare'" @close="submenu === 'compare' && (submenu = undefined)" @dismiss="close"><button v-for="connection in actionConnections" :key="connection.id" role="menuitem" :data-compare-server-id="connection.id" @click="emit('compare', connection.id)">{{ connection.name }}<span v-if="connection.id === currentId" aria-label="Сервер по умолчанию">✓</span></button></ContextSubmenu>
     </template>
    </template>
-   <template v-if="connections.length > 1">
+   <template v-if="actionConnections.length">
     <div class="menu-divider"></div>
     <template v-for="direction in (['upload', 'download'] as const)" :key="direction">
-     <button role="menuitem" :disabled="canTransfer === false" :data-testid="`menu-${direction}-servers`" aria-haspopup="menu" :aria-expanded="submenu === direction" @click="submenu = submenu === direction ? undefined : direction" @mouseenter="submenu = direction">{{ direction === 'upload' ? 'Загрузить на' : 'Скачать с' }} <span>▸</span></button>
-     <div v-if="submenu === direction" role="menu" class="server-submenu" :aria-label="direction === 'upload' ? 'Загрузить на сервер' : 'Скачать с сервера'">
-      <button v-for="connection in connections" :key="connection.id" role="menuitem" :disabled="canTransfer === false" :data-server-id="connection.id" :data-direction="direction" @click="choose(direction, connection.id)">{{ connection.name }}<span v-if="connection.id === currentId">✓</span></button>
-     </div>
+     <ContextSubmenu :label="direction === 'upload' ? '\u0417\u0430\u0433\u0440\u0443\u0437\u0438\u0442\u044c \u043d\u0430' : '\u0421\u043a\u0430\u0447\u0430\u0442\u044c \u0441'" :test-id="`menu-${direction}-servers`" :open="submenu === direction" :disabled="canTransfer === false" @open="submenu = direction" @close="submenu === direction && (submenu = undefined)" @dismiss="close">
+      <button v-for="connection in actionConnections" :key="connection.id" role="menuitem" :disabled="canTransfer === false" :data-server-id="connection.id" :data-direction="direction" @click="choose(direction, connection.id)">{{ connection.name }}<span v-if="connection.id === currentId">✓</span></button>
+     </ContextSubmenu>
     </template>
    </template>
+   <p v-if="connections.length && !actionConnections.length" class="menu-hint" data-testid="no-mapped-servers">Нет серверов с маппингом для выбранных путей.</p>
    <p v-if="!connections.length" class="menu-hint">Добавьте сервер в настройках проекта</p>
   </div>
  </Teleport>

@@ -26,6 +26,51 @@ func makeIdeaProject(t *testing.T) string {
 	ideaFixture(t, root, "sshConfigs.xml", `<project><component name="SshConfigs"><configs><sshConfig id="config1" host="example.invalid" port="2222" username="tester" authType="PASSWORD" password="SECRET-MUST-NOT-LEAK" /></configs></component></project>`)
 	return root
 }
+func TestPhpStormDoesNotInventMissingMappings(t *testing.T) {
+	for index, mappings := range []string{
+		"",
+		`<mapping />`,
+		`<mapping local="$PROJECT_DIR$" />`,
+		`<mapping local="$PROJECT_DIR$" deploy="" />`,
+		`<mapping local="$PROJECT_DIR$" deploy="   " />`,
+	} {
+		t.Run(string(rune(65+index)), func(t *testing.T) {
+			service, executable := workspaceService(t)
+			root := makeIdeaProject(t)
+			ideaFixture(t, root, "deployment.xml", `<project><component name="PublishConfigData"><serverData><paths name="ssh1"><serverdata><mappings>`+mappings+`</mappings></serverdata></paths></serverData></component></project>`)
+			preview, err := service.PreviewPhpStormProject(root)
+			if err != nil || len(preview.Project.Connections) != 1 {
+				t.Fatalf("preview: %+v %v", preview, err)
+			}
+			if len(preview.Project.Connections[0].Mappings) != 0 {
+				t.Fatal("invented mapping")
+			}
+			if _, err := service.CreateImportedProject(preview.Project); err != nil {
+				t.Fatal(err)
+			}
+			restarted, err := New(executable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(restarted.Status().Settings.Projects[0].Connections[0].Mappings) != 0 {
+				t.Fatal("invented mapping on save/reload")
+			}
+		})
+	}
+}
+
+func TestPhpStormPreservesExplicitRootMapping(t *testing.T) {
+	root := makeIdeaProject(t)
+	ideaFixture(t, root, "deployment.xml", `<project><component name="PublishConfigData"><serverData><paths name="ssh1"><serverdata><mappings><mapping local="$PROJECT_DIR$" deploy="/" /></mappings></serverdata></paths></serverData></component></project>`)
+	preview, err := previewPhpStormProject(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappings := preview.Project.Connections[0].Mappings
+	if len(mappings) != 1 || mappings[0].LocalPath != "." || mappings[0].DeploymentPath != "." {
+		t.Fatalf("explicit mapping changed: %+v", mappings)
+	}
+}
 func TestPhpStormSingleProjectPreviewAndCreate(t *testing.T) {
 	service, executable := workspaceService(t)
 	root := makeIdeaProject(t)

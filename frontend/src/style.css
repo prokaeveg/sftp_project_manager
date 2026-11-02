@@ -97,3 +97,5 @@ input,select,textarea{background:#17191d;border:1px solid #41454d;border-radius:
 
 .project-path-expanded { padding:0 6px; border-radius:4px; position:fixed; z-index:120; display:block; width:max-content; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:default; }
 .comparison-tab{display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;overflow:hidden}.comparison-tab .compare-heading>div{min-width:0}.comparison-tab .compare-heading strong{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.comparison-tab .diff-scroll{flex:1;min-height:0}
+.context-submenu-panel{z-index:1001;max-height:calc(100vh - 16px)}
+.tree-row[data-drop-target]{background:#284b39;outline:2px solid #65b98a;outline-offset:-2px}.tree-row[draggable=true]{cursor:grab}

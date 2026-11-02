@@ -3,10 +3,34 @@ package application
 import (
 	"awesomeProject/internal/config"
 	"awesomeProject/internal/transport"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestStatusSerializesUnmappedServersAsEmptyArrays(t *testing.T) {
+	service, _ := workspaceService(t)
+	connection := workspaceConnection("Unmapped")
+	connection.Mappings = nil
+	status, err := service.SaveProject(config.Project{Name: "No mappings", LocalRoot: t.TempDir(), Connections: []config.ProjectConnection{connection}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, snapshot := range []Status{status, service.Status()} {
+		data, err := json.Marshal(snapshot.Settings.Projects[0].Connections[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire map[string]json.RawMessage
+		if err := json.Unmarshal(data, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if string(wire["mappings"]) != "[]" {
+			t.Fatalf("mappings must be an array, got %s", wire["mappings"])
+		}
+	}
+}
 
 func workspaceService(t *testing.T) (*Service, string) {
 	t.Helper()

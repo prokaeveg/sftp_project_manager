@@ -268,6 +268,11 @@ func importIdeaConnection(root string, server ideaServer, paths ideaPaths, confi
 		return c, false, err
 	}
 	for _, m := range paths.Mappings {
+		// PhpStorm can store an unfinished row with no deployment path.
+		// It does not authorize mapping the project to the server root.
+		if strings.TrimSpace(m.Local) == "" || strings.TrimSpace(m.Deploy) == "" {
+			continue
+		}
 		local := strings.ReplaceAll(m.Local, "$PROJECT_DIR$", root)
 		if strings.Contains(local, "$") || !filepath.IsAbs(local) {
 			return c, false, errors.New("неподдерживаемый локальный путь mapping")

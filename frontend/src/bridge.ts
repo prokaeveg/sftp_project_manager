@@ -185,6 +185,7 @@ export interface GitSnapshot { available: boolean; message?: string; files: GitF
 export interface GitBranch { ref: string; name: string }
 
 interface API {
+    PreviewDropTransfer(projectID: string, connectionID: string, direction: 'upload' | 'download', source: string, target: string): Promise<BatchPreview>;
     GetGitBranches(projectID: string): Promise<GitBranch[]>;
     CompareGitFile(projectID: string, relative: string, ref: string): Promise<FileComparison>;
     CopyPaths(projectID: string, side: 'local' | 'remote', sourceID: string, targetID: string, relatives: string[], kind: 'local' | 'project' | 'server'): Promise<void>;

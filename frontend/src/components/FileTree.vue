@@ -1,11 +1,12 @@
 <script setup lang="ts">
+import { ref, watch } from 'vue'
 import type { TreeNode } from '../file-tree'
 import type { FileEntry, GitState } from '../bridge'
 import { gitLabels, gitStatusForPath } from '../git-status'
 import ProjectPath from './ProjectPath.vue'
 import { formatBytes } from '../format-bytes'
 
-const props = defineProps<{ node: TreeNode; busy: boolean; side: 'local' | 'remote'; selected: Set<string>; gitStatuses?: Record<string, GitState>; changesView?: boolean; rootPath?: string }>()
+const props = defineProps<{ node: TreeNode; busy: boolean; side: 'local' | 'remote'; selected: Set<string>; gitStatuses?: Record<string, GitState>; changesView?: boolean; rootPath?: string; dragSide?: 'local' | 'remote' }>()
 const emit = defineEmits<{
  toggle: [node: TreeNode]
  refresh: [node: TreeNode]
@@ -13,7 +14,27 @@ const emit = defineEmits<{
  select: [file: FileEntry, event: MouseEvent | KeyboardEvent]
  context: [file: FileEntry, event: MouseEvent]
  open: [file: FileEntry]
+ dragStart: [file: FileEntry, event: DragEvent]
+ dragEnd: []
+ dropFile: [file: FileEntry]
 }>()
+
+const dropHovered = ref(false)
+watch(() => props.dragSide, () => { dropHovered.value = false })
+function canDrop() { return !props.busy && !!props.dragSide && props.dragSide !== props.side && props.node.entry.isDir && !props.node.entry.excluded && !props.node.entry.isLink }
+function dragOver(event: DragEvent) {
+ if (!canDrop()) return
+ event.preventDefault(); event.stopPropagation(); dropHovered.value = true
+ if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
+}
+function dragLeave(event: DragEvent) {
+ if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node)) dropHovered.value = false
+}
+function dropFile(event: DragEvent) {
+ dropHovered.value = false
+ if (!canDrop()) return
+ event.preventDefault(); event.stopPropagation(); emit('dropFile', props.node.entry)
+}
 
 function status() { return gitStatusForPath(props.gitStatuses, props.node.entry.relativePath) }
 
@@ -46,6 +67,13 @@ function onContextMenu(event: MouseEvent) {
  <li class="tree-node">
   <div
    class="tree-row"
+   :draggable="!busy && !node.entry.excluded && !node.entry.isLink && !node.entry.missing && node.entry.relativePath !== '.'"
+   :data-drop-target="dropHovered && canDrop() ? node.entry.relativePath : undefined"
+   @dragstart.stop="emit('dragStart', node.entry, $event)"
+   @dragend="emit('dragEnd')"
+   @dragover="dragOver"
+   @dragleave="dragLeave"
+   @drop="dropFile"
    :class="{ 'project-root-row': !!rootPath, excluded: node.entry.excluded, selected: selected.has(node.entry.relativePath) }"
    role="treeitem"
    :data-tree-path="node.entry.relativePath"
@@ -81,7 +109,7 @@ function onContextMenu(event: MouseEvent) {
    <p v-if="node.loading" role="status" class="tree-message">Загрузка…</p>
    <div v-if="node.error" class="tree-message error" role="alert"><p>{{ node.error }}</p><p v-if="node.loaded">Показаны данные предыдущего чтения.</p><button type="button" :disabled="busy" @click="emit('refresh', node)">Повторить</button></div>
    <p v-else-if="!changesView && node.loaded && !node.children.length && !node.loading" class="tree-message">Папка пуста</p>
-   <ul v-if="node.children.length" class="file-tree"><FileTree v-for="child in node.children" :key="child.entry.relativePath" :node="child" :busy="busy" :side="side" :selected="selected" :git-statuses="gitStatuses" :changes-view="changesView" @toggle="emit('toggle', $event)" @refresh="emit('refresh', $event)" @select="(file, event) => emit('select', file, event)" @context="(file, event) => emit('context', file, event)" @open="emit('open', $event)" /></ul>
+   <ul v-if="node.children.length" class="file-tree"><FileTree v-for="child in node.children" :key="child.entry.relativePath" :node="child" :busy="busy" :side="side" :selected="selected" :git-statuses="gitStatuses" :changes-view="changesView" :drag-side="dragSide" @drag-start="(file, event) => emit('dragStart', file, event)" @drag-end="emit('dragEnd')" @drop-file="emit('dropFile', $event)" @toggle="emit('toggle', $event)" @refresh="emit('refresh', $event)" @select="(file, event) => emit('select', file, event)" @context="(file, event) => emit('context', file, event)" @open="emit('open', $event)" /></ul>
   </template>
  </li>
 </template>

@@ -187,3 +187,7 @@ func (a *App) GetGitBranches(projectID string) ([]gitstatus.Branch, error) {
 func (a *App) CompareGitFile(projectID, relative, ref string) (application.FileComparison, error) {
 	return a.service.CompareGitFile(a.ctx, projectID, relative, ref)
 }
+
+func (a *App) PreviewDropTransfer(projectID, connectionID, direction, source, target string) (application.BatchPreview, error) {
+	return a.service.PreviewDropTransfer(a.ctx, projectID, connectionID, direction, source, target)
+}
