@@ -1,0 +1,20 @@
+# yaml-language-server: $schema=https://v3.wails.io/schemas/wails.v3.json
+version: 3
+project:
+  name: sftp-project-manager
+  product_name: SFTP Project Manager
+  identifier: com.sftp-project-manager.desktop
+  version: 1.0.0
+frontend:
+  directory: frontend
+  install: [npm, ci]
+  build: [npm, run, build]
+  dev: [npm, run, dev]
+  output: frontend/dist
+  bindings:
+    typescript: true
+    interfaces: true
+    output: frontend/bindings
+build:
+  output: build/bin
+  tags: [production]

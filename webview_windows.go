@@ -2,7 +2,10 @@
 
 package main
 
-import "github.com/wailsapp/go-webview2/webviewloader"
+import (
+	"fmt"
+	"github.com/wailsapp/go-webview2/webviewloader"
+)
 
 func webviewInfo() (string, string) {
 	version, err := webviewloader.GetAvailableCoreWebView2BrowserVersionString("")
@@ -13,4 +16,12 @@ func webviewInfo() (string, string) {
 		return "", "WebView2 Runtime не найден. Эта сборка требует установленный runtime."
 	}
 	return version, "Обнаружен WebView2 Runtime."
+}
+
+func requireWebview() error {
+	version, message := webviewInfo()
+	if version == "" {
+		return fmt.Errorf("%s", message)
+	}
+	return nil
 }

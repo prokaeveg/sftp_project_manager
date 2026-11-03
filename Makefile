@@ -14,27 +14,27 @@ frontend-test:
 	npm --prefix frontend test
 
 build:
-	go run github.com/wailsapp/wails/v2/cmd/wails@v2.16.0 build -platform windows/amd64 -webview2 error
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
 
 dev:
-	go run github.com/wailsapp/wails/v2/cmd/wails@v2.16.0 dev
+	powershell.exe -NoProfile -Command "Set-Item Env:FRONTEND_DEVSERVER_URL 'http://localhost:5173'; go run ."
 
 frontend-dev:
 	npm --prefix frontend run dev
 
 # Isolated browser checks; does not read or import user projects.
 phpstorm-ui-test:
-	npm --prefix frontend run build
-	node scripts/verify-phpstorm-ui.mjs
+	npm --prefix frontend run build:ui-test
+	node scripts/verify/verify-phpstorm-ui.mjs
 
 comparison-ui-test:
-	npm --prefix frontend run build
-	node scripts/verify-file-comparison-ui.mjs
+	npm --prefix frontend run build:ui-test
+	node scripts/verify/verify-file-comparison-ui.mjs
 
 git-ui-test:
-	npm --prefix frontend run build
-	node scripts/verify-git-ui.mjs
+	npm --prefix frontend run build:ui-test
+	node scripts/verify/verify-git-ui.mjs
 
 copy-paths-ui-test:
-	npm --prefix frontend run build
-	node scripts/verify-copy-paths-ui.mjs
+	npm --prefix frontend run build:ui-test
+	node scripts/verify/verify-copy-paths-ui.mjs

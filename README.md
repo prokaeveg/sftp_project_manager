@@ -1,6 +1,6 @@
 # SFTP Project Manager
 
-Portable-приложение: Go + Wails v2 + Vue 3 + TypeScript. Поддерживает несколько проектов и подключений. У каждого сервера есть корень просмотра, а маппинги связывают локальные папки с каталогами относительно этого корня; удалённое дерево можно просматривать вне маппингов, передача идёт по выбранному маппингу. Есть локальное/удалённое дерево, множественный выбор и рекурсивная передача папок с общим предпросмотром и подтверждением перезаписи.
+Portable-приложение: Go + Wails v3.1.0 + Vue 3 + TypeScript. Поддерживает несколько проектов и подключений. У каждого сервера есть корень просмотра, а маппинги связывают локальные папки с каталогами относительно этого корня; удалённое дерево можно просматривать вне маппингов, передача идёт по выбранному маппингу. Есть локальное/удалённое дерево, множественный выбор и рекурсивная передача папок с общим предпросмотром и подтверждением перезаписи.
 
 Рабочее окно устроено по модели PhpStorm: полный локальный проект слева, сервер справа. При первом запуске создайте проект только с локальной папкой; серверы добавляются позже в отдельном окне настроек. Первый сервер становится сервером по умолчанию, выбор можно изменить.
 
@@ -34,19 +34,15 @@ Portable-приложение: Go + Wails v2 + Vue 3 + TypeScript. Поддер�
 
 ## Разработка
 
-На машине разработчика нужны Go 1.26.5, Node.js 24.13.0, npm и WebView2 Runtime. Зафиксированы Wails v2.16.0 и версии frontend в `package.json`/`package-lock.json`; Go-зависимости — в `go.mod`/`go.sum`.
+На машине разработчика нужны Go 1.26.5, Node.js 24.13.0, npm и WebView2 Runtime. Зафиксирован Wails v3.1.0; версии frontend в `package.json`/`package-lock.json`; Go-зависимости — в `go.mod`/`go.sum`.
 
 ```powershell
-cd frontend
-npm ci
-npm run build
-cd ..
+.\scripts\build.ps1
 go test ./...
 go vet ./...
-go run github.com/wailsapp/wails/v2/cmd/wails@v2.16.0 dev
 ```
 
-В режиме разработки `data` создаётся рядом с exe, который запускает Wails. Для проверки поведения поставки используйте release-сборку.
+Первый запуск `scripts/build.ps1` генерирует bindings и `frontend/dist`, необходимые Go embed при компиляции. Для разработки с Vite откройте два терминала: в первом выполните `npm --prefix frontend run dev`, во втором — `make dev`. Цель `make dev` запускает Go-приложение через `go run .` и направляет его на Vite по `http://localhost:5173`; WebView2 Runtime должен быть установлен.
 
 При установленном GNU Make из корня проекта доступны команды:
 
@@ -76,15 +72,12 @@ go run github.com/wailsapp/wails/v2/cmd/wails@v2.16.0 dev
 .\scripts\build.ps1
 ```
 
-Результат: `build/bin/sftp-project-manager.exe` и `dist/sftp-project-manager-windows-amd64.zip`. Wails собирает frontend и встраивает его в exe. Скрипт использует `-webview2 error`: приложение не скачивает и не устанавливает runtime автоматически.
+Результат: `build/bin/sftp-project-manager.exe` и `dist/sftp-project-manager-windows-amd64.zip`. Скрипт генерирует bindings закреплённым CLI v3.1.0, устанавливает frontend-зависимости, собирает frontend, затем собирает Windows amd64 exe и включает frontend в бинарник. Он не запускает установщик WebView2.
 
-Если политика PowerShell запрещает `.ps1`, выполните команды напрямую, без изменения политики:
+Если политика PowerShell запрещает запуск `.ps1`, вызовите его в отдельном процессе, не меняя системную политику:
 
 ```powershell
-go run github.com/wailsapp/wails/v2/cmd/wails@v2.16.0 build -platform windows/amd64 -webview2 error
-# Упаковку выполнять только после успешной сборки.
-New-Item -ItemType Directory -Force dist
-Compress-Archive -LiteralPath build/bin/sftp-project-manager.exe,README.md -DestinationPath dist/sftp-project-manager-windows-amd64.zip -Force
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build.ps1
 ```
 
 ## Portable-запуск
@@ -92,7 +85,7 @@ Compress-Archive -LiteralPath build/bin/sftp-project-manager.exe,README.md -Dest
 После распаковки проверьте запуск, выбор локальной папки, подключение к серверу
 и передачу тестового файла на своём компьютере.
 
-Распакуйте ZIP в доступную для записи папку и запустите exe. Go и Node.js конечному пользователю не нужны. Эта поставка использует установленный WebView2 Runtime; автономный архив с Fixed Version Runtime пока не подготовлен.
+Распакуйте ZIP в доступную для записи папку и запустите exe. Go и Node.js конечному пользователю не нужны. Для запуска требуется установленный Microsoft Edge WebView2 Runtime; автономный архив с Fixed Version Runtime пока не подготовлен.
 
 Настройки: `data/settings.json`, предыдущая валидная версия: `data/settings.json.bak`, данные браузера: `data/webview2`. Пути вычисляются относительно exe, а не рабочей папки. При ошибке доступа перенесите приложение в папку, доступную для записи. Повреждённый конфиг или неизвестная версия схемы останавливают запуск: сохраните исходный файл и восстановите резервную копию вручную. Автоматического сброса нет.
 

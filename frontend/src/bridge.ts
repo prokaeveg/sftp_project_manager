@@ -1,5 +1,6 @@
 export interface Connection {
-    mode: 'ssh_alias' | 'manual';
+    // Preserve legacy settings; Go validates the mode when connecting.
+    mode: string;
     authMode?: string;
     alias: string;
     configPath: string;
@@ -184,7 +185,7 @@ export interface GitSnapshot { available: boolean; message?: string; files: GitF
 
 export interface GitBranch { ref: string; name: string }
 
-interface API {
+export interface API {
     PreviewDropTransfer(projectID: string, connectionID: string, direction: 'upload' | 'download', source: string, target: string): Promise<BatchPreview>;
     GetGitBranches(projectID: string): Promise<GitBranch[]>;
     CompareGitFile(projectID: string, relative: string, ref: string): Promise<FileComparison>;
@@ -255,12 +256,24 @@ interface API {
 
 declare global {
     interface Window {
-        go?: { main: { App: API } }
+        __SFTP_TEST_BACKEND__?: API
     }
 }
 
-export function backend() {
-    const api = window.go?.main.App
+let api: API | undefined
+
+export async function initializeBackend() {
+    if (import.meta.env.MODE === 'ui-test' && window.__SFTP_TEST_BACKEND__) {
+        api = window.__SFTP_TEST_BACKEND__
+        return
+    }
+    const [raw, { createBackend }] = await Promise.all([
+        import('../bindings/awesomeProject/app'), import('./bridge-adapter'),
+    ])
+    api = createBackend(raw)
+}
+
+export function backend(): API {
     if (!api) throw new Error('Откройте приложение через Wails: Go backend недоступен в отдельном браузере.')
     return api
 }

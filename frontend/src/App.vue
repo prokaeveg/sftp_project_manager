@@ -186,7 +186,7 @@ async function refreshGit() {
  const request = ++gitRequest
  gitLoading.value = true; gitError.value = ''
  try {
-  const api = window.go?.main.App
+  const api = backend()
   if (!api?.GetGitStatus) { git.value = { available: false, message: 'Git-статус доступен в приложении Wails', files: [] }; return }
   const result = await api.GetGitStatus(projectID)
   if (request === gitRequest && project.id === projectID) { git.value = result; pruneChangedSelection() }
@@ -312,7 +312,7 @@ async function pollAuthPrompt() {
  if (authPollTask) return authPollTask
  const revision = authPollRevision
  authPollTask = (async () => {
-  const api = window.go?.main.App
+  const api = backend()
   if (!api?.GetAuthPrompt || authSubmitting.value) return
   try {
    const prompt = await api.GetAuthPrompt()
@@ -336,7 +336,7 @@ function scheduleAuthPoll() {
  if (authPollingEnabled) authPollTimer = setTimeout(() => { void pollAuthPrompt().finally(scheduleAuthPoll) }, 250)
 }
 async function submitAuthPrompt(cancelled = false) {
- const prompt = authPrompt.value, api = window.go?.main.App
+ const prompt = authPrompt.value, api = backend()
  if (!prompt || authSubmitting.value) return
  if (!api?.RespondAuthPrompt) { authPromptError.value = 'Ответ SSH-аутентификации недоступен.'; return }
  authSubmitting.value = true; authPromptError.value = ''

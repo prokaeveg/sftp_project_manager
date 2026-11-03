@@ -11,31 +11,27 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App is the narrow bridge between Vue and the application service.
 type App struct {
 	service *application.Service
 	ctx     context.Context
-	uiCtx   context.Context
+	desktop desktopAdapter
 }
-
-func (a *App) startup(ctx context.Context) { a.uiCtx = ctx }
 
 // SelectLocalDirectory changes only the draft in the UI, never saved settings.
 func (a *App) SelectLocalDirectory(current string) (string, error) {
-	if a.uiCtx == nil {
+	if a.desktop == nil {
 		return "", fmt.Errorf("Диалог выбора папки доступен после запуска окна приложения")
 	}
-	options := runtime.OpenDialogOptions{Title: "Выберите локальную папку проекта"}
+	initial := ""
 	if filepath.IsAbs(current) {
 		if info, err := os.Stat(current); err == nil && info.IsDir() {
-			options.DefaultDirectory = current
+			initial = current
 		}
 	}
-	selected, err := runtime.OpenDirectoryDialog(a.uiCtx, options)
+	selected, err := a.desktop.SelectDirectory(initial)
 	if err != nil {
 		return "", fmt.Errorf("Не удалось открыть диалог выбора папки: %w", err)
 	}
@@ -84,14 +80,14 @@ func (a *App) GetGitStatus(projectID string) (gitstatus.Snapshot, error) {
 }
 
 func (a *App) CopyPaths(projectID, side, sourceID, targetID string, relatives []string, kind string) error {
-	if a.uiCtx == nil {
+	if a.desktop == nil {
 		return fmt.Errorf("буфер обмена доступен только в окне приложения")
 	}
 	text, err := a.service.CopiedPaths(projectID, side, sourceID, targetID, relatives, kind)
 	if err != nil {
 		return err
 	}
-	if err := runtime.ClipboardSetText(a.uiCtx, text); err != nil {
+	if err := a.desktop.SetClipboard(text); err != nil {
 		return fmt.Errorf("не удалось записать пути в буфер обмена: %w", err)
 	}
 	return nil

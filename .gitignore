@@ -38,6 +38,7 @@ go.work.sum
 /frontend/node_modules/
 /frontend/dist/
 /frontend/wailsjs/
+/frontend/bindings/
 /build/bin/
 /build/*.syso
 /*.syso
