@@ -2,15 +2,18 @@ package main
 
 import (
 	"awesomeProject/internal/application"
+	"awesomeProject/internal/config"
 	"awesomeProject/internal/transport"
 	"context"
+	"crypto/sha256"
 	"embed"
 	"encoding/json"
 	"fmt"
 	wails "github.com/wailsapp/wails/v3/pkg/application"
 	"io/fs"
 	"os"
-	"sync"
+	"path/filepath"
+	"strings"
 )
 
 //go:embed all:frontend/dist
@@ -35,36 +38,52 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	service, err := application.New(executable)
-	if err != nil {
-		return err
-	}
-	var shutdownOnce sync.Once
-	shutdown := func() { shutdownOnce.Do(service.Shutdown) }
-	defer shutdown()
 	if len(os.Args) == 2 && os.Args[1] == "--diagnostics" {
-		return json.NewEncoder(os.Stdout).Encode((&App{service: service}).GetStatus())
+		service, err := application.New(executable)
+		if err != nil {
+			return err
+		}
+		defer service.Shutdown()
+		return json.NewEncoder(os.Stdout).Encode((&session{service: service}).GetStatus())
 	}
 	if err := requireWebview(); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	bridge := &App{service: service, ctx: ctx}
+	dataDir, err := config.DataDir(executable)
+	if err != nil {
+		return err
+	}
+	manager := &windowManager{sessions: map[uint]*session{}, windows: map[uint]*wails.WebviewWindow{}, executable: executable}
+	bridge := &App{manager: manager}
 	frontend, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		return err
 	}
 	app := wails.New(wails.Options{
-		Name:       "SFTP Project Manager",
-		Assets:     wails.AssetOptions{Handler: wails.BundledAssetFileServer(frontend)},
-		Services:   []wails.Service{wails.NewService(bridge)},
-		Windows:    wails.WindowsOptions{WebviewUserDataPath: service.Status().WebviewDataDir},
-		OnShutdown: func() { cancel(); shutdown() },
+		Name:           "SFTP Project Manager",
+		Assets:         wails.AssetOptions{Handler: wails.BundledAssetFileServer(frontend)},
+		Services:       []wails.Service{wails.NewService(bridge)},
+		Windows:        wails.WindowsOptions{WebviewUserDataPath: filepath.Join(dataDir, "webview2")},
+		OnShutdown:     manager.shutdown,
+		SingleInstance: &wails.SingleInstanceOptions{UniqueID: singleInstanceID(executable), OnSecondInstanceLaunch: func(wails.SecondInstanceData) { manager.focusAny() }},
 	})
-	window := app.Window.NewWithOptions(wails.WebviewWindowOptions{Title: "SFTP Project Manager", URL: "/", Width: 1280, Height: 800, MinWidth: 960, MinHeight: 640})
-	bridge.desktop = &wailsDesktop{app: app, window: window}
+	service, err := application.New(executable)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	initial := &session{service: service, ctx: ctx, cancel: cancel}
+	manager.app = app
+	manager.registerWindowHook()
+	manager.add(initial)
+	defer manager.shutdown()
 	return app.Run()
 }
 
 func printError(message string) { fmt.Fprintln(os.Stderr, message) }
+
+func singleInstanceID(executable string) string {
+	dir := strings.ToLower(filepath.Clean(filepath.Dir(executable)))
+	digest := sha256.Sum256([]byte(dir))
+	return fmt.Sprintf("sftp.project.manager.p%x", digest)
+}

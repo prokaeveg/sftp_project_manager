@@ -184,8 +184,10 @@ export interface GitFile { isDir?: boolean; path: string; status: GitState; prev
 export interface GitSnapshot { available: boolean; message?: string; files: GitFile[] }
 
 export interface GitBranch { ref: string; name: string }
+export interface ProjectOpenResult { action: 'current' | 'new' | 'focused'; status: Status }
 
 export interface API {
+    OpenProject(projectID: string, mode: 'current' | 'new'): Promise<ProjectOpenResult>;
     PreviewDropTransfer(projectID: string, connectionID: string, direction: 'upload' | 'download', source: string, target: string): Promise<BatchPreview>;
     GetGitBranches(projectID: string): Promise<GitBranch[]>;
     CompareGitFile(projectID: string, relative: string, ref: string): Promise<FileComparison>;

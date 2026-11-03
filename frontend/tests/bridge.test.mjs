@@ -37,3 +37,13 @@ test('bridge handles empty listings and checks status values at the typed bounda
  assert.deepEqual(await api.GetNavigationStatus(), { state: 'connected', projectID: 'p', connectionID: 'c' })
  await assert.rejects(api.GetGitStatus('p'), /unexpected/)
 })
+
+test('project opening preserves the source window status and passes the requested mode', async () => {
+ const calls = []
+ const api = createBackend({ OpenProject: async (...args) => { calls.push(args); return { action: 'new', status: { settings: { activeProjectID: 'source', projects: [] } } } } })
+ const result = await api.OpenProject('target', 'new')
+ assert.deepEqual(calls, [['target', 'new']])
+ assert.equal(result.action, 'new')
+ assert.equal(result.status.settings.activeProjectID, 'source')
+ assert.equal(result.status.settings.activeConnectionID, '')
+})

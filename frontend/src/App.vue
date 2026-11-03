@@ -9,6 +9,7 @@ import { projectNameFromRoot } from './project-name'
 import { recentBranches } from './git-recent'
 import TransferMenu from './components/TransferMenu.vue'
 import FileWorkspace from './components/FileWorkspace.vue'
+import ProjectOpenDialog from './components/ProjectOpenDialog.vue'
 import { directorySearchExcluded } from './search-exclusions'
 import { formatBytes } from './format-bytes'
 import { gitStatusMap, gitChangesTree } from './git-status'
@@ -75,6 +76,8 @@ let navigationRequestSequence = 0
 const overwrite = ref(false), includeEnvironment = ref(false)
 const wizard = ref(false), settingsOpen = ref(false), editConnection = ref(0), editMapping = ref(0)
 const settingsDialog = ref<HTMLDialogElement>(), previewDialog = ref<HTMLDialogElement>(), settingsTrigger = ref<HTMLElement>()
+const projectToOpen = ref<{ id: string; name: string }>(), projectOpening = ref(false), projectOpenError = ref('')
+let projectSelectTrigger: HTMLElement | undefined
 const authDialog = ref<HTMLDialogElement>(), authAnswerInput = ref<HTMLInputElement>()
 const authPrompt = ref<AuthPrompt | null>(null)
 const authAnswer = ref(''), authRemember = ref(false), authPromptError = ref(''), authSubmitting = ref(false)
@@ -371,15 +374,45 @@ async function forgetSavedPassword() {
   notice.value = 'Сохранённый пароль удалён.'
  })
 }
-async function selectProject(id: string) {
- const selected = projects.value.find(p => p.id === id); if (!selected) return
- await run(async () => {
-  navigationRevision++; setNavigationDisconnected(id, '')
-  status.value = await backend().SelectProject(id, '', '')
-  replaceProject(project, projects.value.find(p => p.id === id) ?? selected)
-  refreshDraftFromProject(); resetTrees(); nameRemoteRoot(); await loadLocalRoot()
-  await syncNavigationStatus()
- })
+function requestProjectOpen(event: Event) {
+ const select = event.target as HTMLSelectElement
+ const selected = projects.value.find(p => p.id === select.value)
+ select.value = project.id
+ if (!selected || selected.id === project.id || busy.value || projectOpening.value) return
+ projectSelectTrigger = select; projectOpenError.value = ''
+ projectToOpen.value = { id: selected.id, name: selected.name }
+}
+async function openSelectedProject(choice: 'current' | 'new' | 'cancel') {
+ if (projectOpening.value || !projectToOpen.value) return
+ if (choice === 'cancel') {
+  projectToOpen.value = undefined
+  await nextTick(); projectSelectTrigger?.focus()
+  return
+ }
+ projectOpening.value = true; projectOpenError.value = ''
+ try {
+  const result = await backend().OpenProject(projectToOpen.value.id, choice)
+  status.value = result.status
+  projectToOpen.value = undefined
+  if (result.action === 'current') {
+   await run(async () => {
+    navigationRevision++; setNavigationDisconnected(result.status.settings.activeProjectID, '')
+    const active = savedProject.value
+    if (active) replaceProject(project, active)
+    refreshDraftFromProject(); resetTrees(); nameRemoteRoot(); await loadLocalRoot()
+    await syncNavigationStatus()
+   })
+  } else if (result.action === 'focused') notice.value = 'Проект уже открыт в другом окне.'
+ } catch (e) { projectOpenError.value = String(e) }
+ finally { projectOpening.value = false }
+}
+async function refreshProjectCatalog() {
+ if (busy.value || settingsOpen.value || projectOpening.value || !status.value) return
+ const before = status.value
+ try {
+  const updated = await backend().GetStatus()
+  if (status.value === before && !busy.value && !settingsOpen.value && !projectOpening.value && JSON.stringify(updated.settings) !== JSON.stringify(before.settings)) status.value = updated
+ } catch { /* Keep the current workspace on a background refresh failure. */ }
 }
 async function selectConnection(id: string) {
  const connection = savedProject.value?.connections.find(c => c.id === id), mapping = connection?.mappings[0]
@@ -703,6 +736,7 @@ watch(() => authPrompt.value?.id, async id => {
 
 watch([busy, queueRunning, savedConnection, savedProject], () => { transferMenu.value = undefined })
 onMounted(async () => {
+ window.addEventListener('focus', refreshProjectCatalog)
  gitPollingEnabled = true; pollGit()
  queuePollingEnabled = true
  authPollingEnabled = true
@@ -715,14 +749,15 @@ onMounted(async () => {
   replaceProject(project, active); refreshDraftFromProject(); nameRemoteRoot(); await loadLocalRoot()
  })
 })
-onUnmounted(() => { gitPollingEnabled = false; gitRequest++; if (gitTimer) clearTimeout(gitTimer); queuePollingEnabled = false; authPollingEnabled = false; authPollRevision++; authAnswer.value = ''; authRemember.value = false; if (queuePollTimer) clearTimeout(queuePollTimer); if (authPollTimer) clearTimeout(authPollTimer) })
+onUnmounted(() => { window.removeEventListener('focus', refreshProjectCatalog); gitPollingEnabled = false; gitRequest++; if (gitTimer) clearTimeout(gitTimer); queuePollingEnabled = false; authPollingEnabled = false; authPollRevision++; authAnswer.value = ''; authRemember.value = false; if (queuePollTimer) clearTimeout(queuePollTimer); if (authPollTimer) clearTimeout(authPollTimer) })
 </script>
 
 <template>
  <main class="app-shell project-glow" :style="{ '--project-color': project.color ?? '#517bbd', '--glow-width': `${760 * (project.glowSize ?? 100) / 100}px`, '--glow-height': `${360 * (project.glowSize ?? 100) / 100}px` }">
+  <ProjectOpenDialog v-if="projectToOpen" :project-name="projectToOpen.name" :busy="projectOpening" :error="projectOpenError" @choose="openSelectedProject" />
   <header class="topbar">
    <div class="brand-mark">⇄</div><strong class="brand">SFTP проекты</strong>
-   <label class="header-project">Проект <select data-testid="project-select" :value="project.id" :disabled="busy || !projects.length" @change="selectProject(($event.target as HTMLSelectElement).value)"><option v-for="item in projects" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
+   <label class="header-project">Проект <select data-testid="project-select" :value="project.id" :disabled="busy || !projects.length" @change="requestProjectOpen"><option v-for="item in projects" :key="item.id" :value="item.id">{{ item.name }}</option></select></label>
    <button data-testid="create-project" class="quiet" :disabled="busy" @click="startNewProject">＋ Новый проект</button>
    <span class="top-spacer"></span><button data-testid="queue-toggle" type="button" class="quiet" :aria-expanded="queuePanelOpen" @click="queuePanelOpen = !queuePanelOpen">⇅ Очередь<span v-if="queueCount" class="queue-count" :title="`${queueCount} выполняется или ожидает`">{{ queueCount }}</span><span v-if="queueProblems" class="queue-count queue-count-error">{{ queueProblems }}</span></button><button ref="settingsTrigger" data-testid="settings-open" class="quiet" :disabled="busy || !project.id" @click="openSettings">⚙ Настройки</button>
    <button v-if="busy && !settingsOpen && !wizard" class="cancel-button" @click="cancel">Отменить операцию</button>

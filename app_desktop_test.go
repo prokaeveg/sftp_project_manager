@@ -21,7 +21,7 @@ func (d *fakeDesktop) SetClipboard(text string) error { d.copied = text; return 
 func TestSelectLocalDirectoryUsesValidInitialAndValidatesResult(t *testing.T) {
 	dir := t.TempDir()
 	desktop := &fakeDesktop{selected: dir}
-	app := &App{desktop: desktop}
+	app := &session{desktop: desktop}
 	got, err := app.SelectLocalDirectory(dir)
 	if err != nil || got != filepath.Clean(dir) || desktop.directory != dir {
 		t.Fatalf("got %q, initial %q, err %v", got, desktop.directory, err)
@@ -54,7 +54,7 @@ func TestCopyPathsWritesClipboardAndReportsFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	desktop := &fakeDesktop{}
-	app := &App{service: service, desktop: desktop}
+	app := &session{service: service, desktop: desktop}
 	id := status.Settings.ActiveProjectID
 	if err := app.CopyPaths(id, "local", "", "", []string{"file.txt"}, "local"); err != nil {
 		t.Fatal(err)

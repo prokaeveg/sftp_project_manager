@@ -57,6 +57,10 @@ export function createBackend(raw: RawAPI): API {
  return {
   ...raw,
   GetStatus: async () => status(await raw.GetStatus()),
+  OpenProject: async (...args) => {
+   const value = await raw.OpenProject(...args)
+   return { action: enumValue(value.action, ['current', 'new', 'focused']), status: status(value.status) }
+  },
   SaveProjectName: async name => status(await raw.SaveProjectName(name)),
   SaveProfile: async value => status(await raw.SaveProfile(value)),
   SaveProject: async value => status(await raw.SaveProject(value)),

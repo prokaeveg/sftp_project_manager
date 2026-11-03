@@ -319,6 +319,16 @@ func configFlatten(settings *config.Settings) {
 }
 
 func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Status, error) {
+	return s.selectProject(projectID, connectionID, mappingID, true)
+}
+
+// SelectWindowProject selects a project in this window without persisting the
+// window-local selection to the shared settings file.
+func (s *Service) SelectWindowProject(projectID, connectionID, mappingID string) (Status, error) {
+	return s.selectProject(projectID, connectionID, mappingID, false)
+}
+
+func (s *Service) selectProject(projectID, connectionID, mappingID string, persist bool) (Status, error) {
 	var navigationToClose *transport.Session
 	defer func() { closeNavigationSession(navigationToClose) }()
 	s.mu.Lock()
@@ -382,8 +392,10 @@ func (s *Service) SelectProject(projectID, connectionID, mappingID string) (Stat
 			return Status{}, errors.New("выбранная локальная папка должна быть каталогом")
 		}
 	}
-	if err = s.store.Save(settings); err != nil {
-		return Status{}, err
+	if persist {
+		if err = s.store.Save(settings); err != nil {
+			return Status{}, err
+		}
 	}
 	s.status.Settings = cloneSettings(settings)
 	navigationToClose = s.reconcileNavigationLocked()
